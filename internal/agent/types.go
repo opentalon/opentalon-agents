@@ -163,6 +163,41 @@ type RunContext struct {
 	EntityID string
 }
 
+// AgentSummary is the list-view of an agent — everything but the full
+// Talon source. Returned by the query API.
+type AgentSummary struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description,omitempty"`
+	GroupID      string    `json:"group_id"`
+	EntityID     string    `json:"entity_id,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	TriggerTypes []string  `json:"trigger_types"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Summary returns the agent's list-view (omits the Talon source).
+func (a Agent) Summary() AgentSummary {
+	types := make([]string, 0, len(a.Triggers))
+	for _, t := range a.Triggers {
+		types = append(types, t.Type)
+	}
+	return AgentSummary{
+		ID: a.ID, Name: a.Name, Description: a.Description,
+		GroupID: a.GroupID, EntityID: a.EntityID, Enabled: a.Enabled,
+		TriggerTypes: types, UpdatedAt: a.UpdatedAt,
+	}
+}
+
+// AgentFilter selects agents for QueryAgents. Empty fields are ignored;
+// set fields are AND-combined.
+type AgentFilter struct {
+	GroupID      string
+	EntityID     string
+	NameContains string // case-insensitive substring match on name
+	Enabled      *bool
+}
+
 // AgentState is the restart-safe watcher state for one agent (Phase 2),
 // stored one row per agent in the agent_state table.
 //

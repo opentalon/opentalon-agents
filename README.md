@@ -208,6 +208,16 @@ Content-Type: application/json
 - The shared **`webhook_secret`** gates the endpoint (401 otherwise; 503 if unset). The **`user_id`** param (query or a top-level body field) scopes the lookup to that user's agent named in the path.
 - The body is mapped to a fact by the agent's `webhook` trigger config (`value_path`/`id_field`/`attribute`) and evaluated on the next tick — same reactive semantics as polling. Returns `202 {"status":"queued"}`.
 
+### Query agents
+
+`GET /v1/agents` (same `Authorization: Bearer <webhook_secret>`) lists agent summaries — never the Talon source. AND-combined filters:
+
+```
+GET /agents/v1/agents?group_id=<g>&entity_id=<user>&name=<substr>&enabled=true
+```
+
+`group_id` (tenant), `entity_id` (creating user), `name` (case-insensitive substring), `enabled`. Fetch a single agent's full source via the `show` action.
+
 ---
 
 ## Develop

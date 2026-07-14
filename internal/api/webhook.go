@@ -17,30 +17,72 @@ import (
 
 const maxBodyBytes = 1 << 20 // 1 MiB
 
-// NewWebhookServer builds the webhook HTTP handler. Every request must
-// carry `Authorization: Bearer <webhook_secret>`; the target agent is
-// scoped by the `user_id` request param (query or body) and named by the
-// `{agent}` path segment. The handler only ENQUEUES — it has no
-// HostCaller, so evaluation happens on the next tick.
-func NewWebhookServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
-	h := &webhook{cfg: cfg, mgr: mgr}
+// NewServer builds the plugin's inbound HTTP handler: the webhook ingress
+// plus a read-only agents query API. Every request must carry
+// `Authorization: Bearer <webhook_secret>` (shared secret gating the whole
+// surface). Retained alias NewWebhookServer for callers.
+func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
+	h := &server{cfg: cfg, mgr: mgr}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/hooks/{agent}", h.handle)
+	mux.HandleFunc("POST /v1/hooks/{agent}", h.handleHook)
+	mux.HandleFunc("GET /v1/agents", h.handleList)
 	return mux
 }
 
-type webhook struct {
+// NewWebhookServer is kept for backwards compatibility.
+func NewWebhookServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
+	return NewServer(cfg, mgr)
+}
+
+type server struct {
 	cfg *config.Config
 	mgr *agent.Manager
 }
 
-func (h *webhook) handle(w http.ResponseWriter, r *http.Request) {
+// guard enforces the shared bearer on every endpoint. Returns false (and
+// writes the response) when the endpoint is disabled or unauthorized.
+func (h *server) guard(w http.ResponseWriter, r *http.Request) bool {
 	if h.cfg.WebhookSecret == "" {
-		writeErr(w, http.StatusServiceUnavailable, "webhook endpoint disabled (set webhook_secret)")
-		return
+		writeErr(w, http.StatusServiceUnavailable, "http endpoint disabled (set webhook_secret)")
+		return false
 	}
 	if !h.authorized(r) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized")
+		return false
+	}
+	return true
+}
+
+// handleList serves GET /v1/agents with optional group_id / entity_id /
+// name (substring) / enabled filters, returning agent summaries.
+func (h *server) handleList(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	f := agent.AgentFilter{
+		GroupID:      q.Get("group_id"),
+		EntityID:     q.Get("entity_id"),
+		NameContains: q.Get("name"),
+	}
+	if e := q.Get("enabled"); e != "" {
+		b := e == "true" || e == "1"
+		f.Enabled = &b
+	}
+	agents, err := h.mgr.QueryAgents(r.Context(), f)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	summaries := make([]agent.AgentSummary, 0, len(agents))
+	for _, a := range agents {
+		summaries = append(summaries, a.Summary())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": summaries})
+}
+
+func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
 		return
 	}
 
@@ -81,7 +123,7 @@ func (h *webhook) handle(w http.ResponseWriter, r *http.Request) {
 
 // authorized compares the bearer token to the configured secret in
 // constant time.
-func (h *webhook) authorized(r *http.Request) bool {
+func (h *server) authorized(r *http.Request) bool {
 	const prefix = "Bearer "
 	hdr := r.Header.Get("Authorization")
 	if !strings.HasPrefix(hdr, prefix) {

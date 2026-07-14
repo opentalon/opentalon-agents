@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/opentalon/opentalon-agents/internal/store"
 )
@@ -319,6 +321,46 @@ func scanAgentWithNextPoll(s scanner) (Agent, *time.Time, error) {
 	a.CreatedAt, _ = time.Parse(timeFmt, created)
 	a.UpdatedAt, _ = time.Parse(timeFmt, updated)
 	return a, parseNullTime(nextPoll), nil
+}
+
+// QueryAgents lists agents matching the filter (all fields AND-combined),
+// newest first. Used by the read-only query API.
+func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, error) {
+	q := `SELECT id, name, description, group_id, entity_id, talon_source,
+		triggers_json, enabled, created_at, updated_at FROM agents WHERE 1=1`
+	var args []any
+	if f.GroupID != "" {
+		q += " AND group_id = ?"
+		args = append(args, f.GroupID)
+	}
+	if f.EntityID != "" {
+		q += " AND entity_id = ?"
+		args = append(args, f.EntityID)
+	}
+	if f.NameContains != "" {
+		q += " AND LOWER(name) LIKE ?"
+		args = append(args, "%"+strings.ToLower(f.NameContains)+"%")
+	}
+	if f.Enabled != nil {
+		q += " AND enabled = ?"
+		args = append(args, boolToInt(*f.Enabled))
+	}
+	q += " ORDER BY created_at DESC"
+
+	rows, err := m.db.SQL().QueryContext(ctx, m.db.Dialect.Rebind(q), args...)
+	if err != nil {
+		return nil, fmt.Errorf("agent query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Agent
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // GetByID resolves an agent by id across all groups (used by the tick
