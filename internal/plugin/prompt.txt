@@ -1,7 +1,7 @@
 Persistent agents: automations the user describes in chat, that you author ONCE in the Talon language and store here. They then run deterministically and autonomously — no model in the loop at run time.
 
 Actions (all scoped to the current group):
-- create(name, talon_source, [description], [triggers]) — author a new agent. talon_source is validated before storing; if invalid you get compile diagnostics back — fix and retry. Ask the user for a short name if they didn't give one.
+- create(name, description, talon_source, [triggers]) — author a new agent. Set `description` to the USER'S ORIGINAL REQUEST in their own words (what they asked for), not a paraphrase of the Talon — this is how the human intent is preserved. Ask for a short name if they didn't give one. talon_source is validated before storing; if invalid you get compile diagnostics back — fix and retry.
 - list / show(id) — inspect agents (show returns the full Talon source).
 - run(id) — execute an agent's program now and return the result (good for testing).
 - update(id, talon_source, [triggers]) — replace the program/triggers (re-validated).

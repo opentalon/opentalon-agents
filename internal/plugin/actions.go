@@ -30,7 +30,7 @@ func actions() []pkg.ActionMsg {
 			InjectContextArgs: injected,
 			Parameters: []pkg.ParameterMsg{
 				{Name: "name", Description: "Short unique name for the agent (within your group).", Type: "string", Required: true},
-				{Name: "description", Description: "Optional human description of what the agent does.", Type: "string", Required: false},
+				{Name: "description", Description: "The user's request in their own words — what they asked this agent to do. Store the original ask verbatim (lightly cleaned up), not your paraphrase of the Talon.", Type: "string", Required: true},
 				source, triggers,
 			},
 		},
