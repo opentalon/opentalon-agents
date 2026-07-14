@@ -57,9 +57,11 @@ plugins:
   agents:
     enabled: true
     plugin: "./plugins/opentalon-agents/opentalon-agents"   # or github/ref
+    expose_http: true                 # only if using webhook triggers
     config:
       db: { driver: sqlite, dsn: ./agents.db }
       talon_plugin_name: talon-plugin
+      webhook_secret: "${AGENTS_WEBHOOK_SECRET}"   # shared bearer for the webhook endpoint
   talon-plugin:
     enabled: true
     github: opentalon/talon-plugin
@@ -188,7 +190,23 @@ Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` does
 
 - **Phase 1 — _shipped_**: plugin scaffold, SQLite/Postgres store + migrations, agent CRUD, inline `run` (validate via `check`, execute via `execute_workflow`).
 - **Phase 2 — _in progress_**: the watcher/tick engine. Tracked in [#1](https://github.com/opentalon/opentalon-agents/issues/1): poll trigger + state ([#3](https://github.com/opentalon/opentalon-agents/issues/3), [#4](https://github.com/opentalon/opentalon-agents/issues/4)), `talonproxy.Evaluate` ([#5](https://github.com/opentalon/opentalon-agents/issues/5)), poller/mapper/engine ([#6](https://github.com/opentalon/opentalon-agents/issues/6)–[#8](https://github.com/opentalon/opentalon-agents/issues/8)), tick + scheduler wiring ([#9](https://github.com/opentalon/opentalon-agents/issues/9)), prompt + E2E ([#10](https://github.com/opentalon/opentalon-agents/issues/10), [#11](https://github.com/opentalon/opentalon-agents/issues/11)). Depends on `talon-plugin`'s `evaluate` action (**done**, `v0.2.0`).
-- **Phase 3/4**: webhook triggers + queue + proxied HTTP ([#12](https://github.com/opentalon/opentalon-agents/issues/12)); cron triggers, full backoff, pagination, polish ([#13](https://github.com/opentalon/opentalon-agents/issues/13)).
+- **Phase 3 — webhook triggers _implemented_**: push data instead of polling. Declare a `webhook` trigger (mapping only), set `expose_http: true` + a `webhook_secret`, and POST to the endpoint below. The handler enqueues into `pending_events`; the next tick drains and evaluates it (the HTTP request has no `HostCaller`, so evaluation is deferred to the tick).
+- **Phase 4**: cron triggers, full backoff, multi-entity pagination, polish ([#13](https://github.com/opentalon/opentalon-agents/issues/13)).
+
+## Webhooks
+
+With `expose_http: true`, the host reverse-proxies `/<config-key>/*` to the plugin's private listener. An external system pushes data with:
+
+```
+POST /agents/v1/hooks/<agent-name>?user_id=<owner>
+Authorization: Bearer <webhook_secret>
+Content-Type: application/json
+
+{ "barcode": "ABC-123", "stock": 8 }
+```
+
+- The shared **`webhook_secret`** gates the endpoint (401 otherwise; 503 if unset). The **`user_id`** param (query or a top-level body field) scopes the lookup to that user's agent named in the path.
+- The body is mapped to a fact by the agent's `webhook` trigger config (`value_path`/`id_field`/`attribute`) and evaluated on the next tick — same reactive semantics as polling. Returns `202 {"status":"queued"}`.
 
 ---
 

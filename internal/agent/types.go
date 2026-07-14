@@ -85,6 +85,55 @@ func (a Agent) PollTrigger() (*PollConfig, bool) {
 	return nil, false
 }
 
+// WebhookConfig is the `config` payload of a webhook trigger. An external
+// system POSTs a JSON body to /v1/hooks/<agent> (authenticated by the
+// caller's bearer token); the body is mapped to a fact
+// (value_path/id_field/attribute, same as poll) and evaluated on the next
+// tick.
+type WebhookConfig struct {
+	ValuePath string `json:"value_path"`         // dot-path to the watched value in the POST body
+	IDField   string `json:"id_field,omitempty"` // dot-path to the entity id
+	Attribute string `json:"attribute"`          // fact attribute name
+}
+
+// Webhook decodes the trigger's Config as a WebhookConfig.
+func (t Trigger) Webhook() (*WebhookConfig, error) {
+	if t.Type != TriggerWebhook {
+		return nil, fmt.Errorf("trigger is %q, not a webhook trigger", t.Type)
+	}
+	var c WebhookConfig
+	if err := json.Unmarshal(t.Config, &c); err != nil {
+		return nil, fmt.Errorf("decode webhook config: %w", err)
+	}
+	return &c, nil
+}
+
+// WebhookTrigger returns the agent's first webhook trigger config, if any.
+func (a Agent) WebhookTrigger() (*WebhookConfig, bool) {
+	for _, t := range a.Triggers {
+		if t.Type == TriggerWebhook {
+			if c, err := t.Webhook(); err == nil {
+				return c, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// PendingEvent is a queued webhook delivery awaiting the next tick, stored
+// in the pending_events table. The HTTP handler that receives a webhook
+// has no HostCaller, so it can only enqueue; the tick drains and evaluates.
+type PendingEvent struct {
+	ID         string          `json:"id"`
+	AgentID    string          `json:"agent_id"`
+	Kind       string          `json:"kind"` // "facts"
+	Payload    json.RawMessage `json:"payload"`
+	ReceivedAt time.Time       `json:"received_at"`
+}
+
+// PendingEvent kinds.
+const EventKindFacts = "facts"
+
 // Run is one execution of an agent.
 type Run struct {
 	ID          string          `json:"id"`

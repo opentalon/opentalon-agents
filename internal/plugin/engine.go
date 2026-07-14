@@ -46,11 +46,17 @@ func (e *Engine) Tick(ctx context.Context, host pkg.HostCaller) (TickResult, err
 
 // tickAt is Tick with an injectable clock (for tests).
 func (e *Engine) tickAt(ctx context.Context, host pkg.HostCaller, now time.Time) (TickResult, error) {
+	res := TickResult{}
+
+	// Drain queued webhook deliveries first (they carry a HostCaller only
+	// now, at tick time), then sweep the due poll watchers.
+	e.drainPending(ctx, host, now, &res)
+
 	due, err := e.mgr.ListEnabledPollDue(ctx, now)
 	if err != nil {
-		return TickResult{}, fmt.Errorf("tick: list due agents: %w", err)
+		return res, fmt.Errorf("tick: list due agents: %w", err)
 	}
-	res := TickResult{Agents: len(due)}
+	res.Agents += len(due)
 	for _, a := range due {
 		fired, terr := e.tickAgent(ctx, host, a, now)
 		res.Firings += fired
@@ -60,6 +66,73 @@ func (e *Engine) tickAt(ctx context.Context, host pkg.HostCaller, now time.Time)
 		}
 	}
 	return res, nil
+}
+
+// drainPending processes every queued webhook event: map its payload to a
+// fact, evaluate the agent reactively, persist, and record a run if it
+// fired. Events are deleted after processing (success or failure) to avoid
+// a poison-message loop.
+func (e *Engine) drainPending(ctx context.Context, host pkg.HostCaller, now time.Time, res *TickResult) {
+	events, err := e.mgr.ListPendingEvents(ctx)
+	if err != nil {
+		slog.Warn("opentalon-agents: list pending events", "error", err)
+		return
+	}
+	for _, ev := range events {
+		fired, err := e.applyEvent(ctx, host, ev, now)
+		res.Firings += fired
+		if err != nil {
+			res.Errors++
+			slog.Warn("opentalon-agents: pending event failed", "event", ev.ID, "agent", ev.AgentID, "error", err)
+		}
+		if derr := e.mgr.DeleteEvent(ctx, ev.ID); derr != nil {
+			slog.Warn("opentalon-agents: delete pending event", "event", ev.ID, "error", derr)
+		}
+	}
+}
+
+// applyEvent maps a webhook payload to a fact and evaluates the agent.
+func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.PendingEvent, now time.Time) (int, error) {
+	a, err := e.mgr.GetByID(ctx, ev.AgentID)
+	if err != nil {
+		return 0, fmt.Errorf("load agent: %w", err)
+	}
+	if !a.Enabled {
+		return 0, nil // dropped: agent disabled since the event arrived
+	}
+	wc, ok := a.WebhookTrigger()
+	if !ok {
+		return 0, fmt.Errorf("agent %s has no webhook trigger", a.ID)
+	}
+	var body any
+	if err := json.Unmarshal(ev.Payload, &body); err != nil {
+		return 0, fmt.Errorf("decode payload: %w", err)
+	}
+	state, err := e.mgr.GetState(ctx, a.ID)
+	if err != nil {
+		return 0, fmt.Errorf("get state: %w", err)
+	}
+	facts, registry, err := agent.MapValue(wc.ValuePath, wc.IDField, wc.Attribute, body, state.EntityMap)
+	if err != nil {
+		return 0, err
+	}
+	factsJSON, err := json.Marshal(facts)
+	if err != nil {
+		return 0, err
+	}
+	evalRes, err := e.talon.Evaluate(ctx, host, a.TalonSource, factsJSON, state.FactsSnapshot)
+	if err != nil {
+		return 0, err
+	}
+	state.FactsSnapshot = evalRes.Snapshot
+	state.EntityMap = registry
+	if err := e.mgr.SaveState(ctx, state); err != nil {
+		return 0, fmt.Errorf("save state: %w", err)
+	}
+	if len(evalRes.Firings) > 0 {
+		e.recordRun(ctx, a, agent.TriggerWebhook, factsJSON, evalRes, now)
+	}
+	return len(evalRes.Firings), nil
 }
 
 // tickAgent polls, maps, evaluates, and persists a single agent. A poll
@@ -104,7 +177,7 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 	}
 
 	if len(evalRes.Firings) > 0 {
-		e.recordRun(ctx, a, factsJSON, evalRes, now)
+		e.recordRun(ctx, a, agent.TriggerPoll, factsJSON, evalRes, now)
 	}
 	return len(evalRes.Firings), nil
 }
@@ -129,12 +202,12 @@ func (e *Engine) failAgent(ctx context.Context, a agent.Agent, state agent.Agent
 }
 
 // recordRun stores a completed run capturing the asserted facts and the
-// firings.
-func (e *Engine) recordRun(ctx context.Context, a agent.Agent, factsJSON json.RawMessage, evalRes EvalResult, now time.Time) {
+// firings, tagged with the trigger that produced it.
+func (e *Engine) recordRun(ctx context.Context, a agent.Agent, triggerType string, factsJSON json.RawMessage, evalRes EvalResult, now time.Time) {
 	result, _ := json.Marshal(map[string]any{"firings": evalRes.Firings})
 	started := now
 	if _, err := e.mgr.CreateRun(ctx, agent.Run{
-		AgentID: a.ID, TriggerType: agent.TriggerPoll, Status: agent.StatusCompleted,
+		AgentID: a.ID, TriggerType: triggerType, Status: agent.StatusCompleted,
 		Event: factsJSON, Result: result, StartedAt: &started, FinishedAt: &started,
 	}); err != nil {
 		slog.Warn("opentalon-agents: record run", "agent", a.ID, "error", err)

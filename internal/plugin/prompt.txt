@@ -48,7 +48,15 @@ poll config fields:
 - id_field — dot-path to the entity's id (so multiple items stay distinct). Omit for a single watched thing.
 - attribute — the fact attribute name. **It MUST match the `attr` in your `on change attr "..."` block** (here, "current_stock").
 
+PUSH INSTEAD OF POLL (webhook)
+Instead of polling, an external system can PUSH data. Use a `webhook` trigger — same `on`-block source, but the trigger carries just the mapping (no server/tool/interval):
+
+  [{"type":"webhook","config":{"value_path":"stock","id_field":"barcode","attribute":"current_stock"}}]
+
+The system then POSTs the data to `/v1/hooks/<agent-name>?user_id=<the user>` with header `Authorization: Bearer <webhook_secret>` (a shared secret the operator configures). The body is mapped to a fact exactly like a poll and evaluated on the next tick. Tell the user this URL if they want to drive the agent by webhook.
+
 RULES
 - The `when` threshold must be a literal number (you can't compare against another fact). Bake the user's number in.
+- The poll/webhook `attribute` MUST match the `attr` in your `on change attr "..."` block.
 - Keep one clear task per agent.
 - Validate by create (invalid Talon is rejected with diagnostics) or by run(id).
