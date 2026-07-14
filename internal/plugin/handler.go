@@ -127,6 +127,9 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	if err := agent.ValidateTriggers(triggers); err != nil {
+		return errResp(req.ID, err.Error())
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
@@ -210,6 +213,9 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 	}
 	triggers, err := parseTriggers(req.Args["triggers"])
 	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
+	if err := agent.ValidateTriggers(triggers); err != nil {
 		return errResp(req.ID, err.Error())
 	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {

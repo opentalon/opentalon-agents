@@ -46,13 +46,14 @@ const (
 // call, how often, and how to turn its response into a fact. The engine
 // (Phase 2) reads it each tick; in Phase 1 it is only stored/validated.
 type PollConfig struct {
-	Server    string            `json:"server"`             // MCP server name
-	Tool      string            `json:"tool"`               // MCP tool name
-	Args      map[string]string `json:"args,omitempty"`     // static tool args (e.g. {"barcode":"ABC-123"})
-	Interval  string            `json:"interval"`           // Go duration, e.g. "5m"
-	ValuePath string            `json:"value_path"`         // dot-path to the watched value in the response
-	IDField   string            `json:"id_field,omitempty"` // dot-path to the entity's external id
-	Attribute string            `json:"attribute"`          // fact attribute name, e.g. "current_stock"
+	Server    string            `json:"server"`               // MCP server name
+	Tool      string            `json:"tool"`                 // MCP tool name
+	Args      map[string]string `json:"args,omitempty"`       // static tool args (e.g. {"barcode":"ABC-123"})
+	Interval  string            `json:"interval"`             // Go duration, e.g. "5m"
+	ItemsPath string            `json:"items_path,omitempty"` // dot-path to a list; set for multi-entity watches (value_path/id_field are then per-item)
+	ValuePath string            `json:"value_path"`           // dot-path to the watched value (in the response, or in each item)
+	IDField   string            `json:"id_field,omitempty"`   // dot-path to the entity's external id
+	Attribute string            `json:"attribute"`            // fact attribute name, e.g. "current_stock"
 }
 
 // Poll decodes the trigger's Config as a PollConfig. It errors if the

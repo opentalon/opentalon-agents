@@ -13,8 +13,6 @@ import (
 	"github.com/opentalon/opentalon-agents/internal/config"
 )
 
-const maxBackoff = 30 * time.Minute
-
 // Engine drives the autonomous watchers. On each tick it sweeps the agents
 // whose poll trigger is due and, for each, polls the source, maps the
 // result to facts, evaluates the agent's Talon reactively (via
@@ -65,7 +63,76 @@ func (e *Engine) tickAt(ctx context.Context, host pkg.HostCaller, now time.Time)
 			slog.Warn("opentalon-agents: agent tick failed", "agent", a.ID, "name", a.Name, "error", terr)
 		}
 	}
+
+	e.sweepSchedules(ctx, host, now, &res)
 	return res, nil
+}
+
+// sweepSchedules runs every enabled schedule (cron) agent that is due. A
+// schedule agent runs its Talon as a one-shot workflow (execute_workflow)
+// on its cron cadence — no facts/snapshot involved.
+func (e *Engine) sweepSchedules(ctx context.Context, host pkg.HostCaller, now time.Time, res *TickResult) {
+	due, err := e.mgr.ListEnabledScheduleDue(ctx, now)
+	if err != nil {
+		slog.Warn("opentalon-agents: list schedule-due", "error", err)
+		return
+	}
+	res.Agents += len(due)
+	for _, a := range due {
+		if err := e.scheduleAgent(ctx, host, a, now); err != nil {
+			res.Errors++
+			slog.Warn("opentalon-agents: scheduled run failed", "agent", a.ID, "name", a.Name, "error", err)
+		}
+	}
+}
+
+// scheduleAgent advances one cron agent. On first sight it just computes
+// the next fire time (cron means "at these times", not "now"); when due it
+// runs the workflow and reschedules.
+func (e *Engine) scheduleAgent(ctx context.Context, host pkg.HostCaller, a agent.Agent, now time.Time) error {
+	spec, ok := a.ScheduleTrigger()
+	if !ok {
+		return nil
+	}
+	sched, err := agent.ParseCron(spec)
+	if err != nil {
+		return err // rejected at create time, but guard anyway
+	}
+	state, err := e.mgr.GetState(ctx, a.ID)
+	if err != nil {
+		return fmt.Errorf("get state: %w", err)
+	}
+
+	// First sight: initialize the next fire time, don't run.
+	if state.NextCronAt == nil {
+		next := sched.Next(now)
+		state.NextCronAt = &next
+		return e.mgr.SaveState(ctx, state)
+	}
+	if state.NextCronAt.After(now) {
+		return nil // not due yet
+	}
+
+	// Due: run the workflow, then reschedule (regardless of run outcome).
+	result, runErr := e.talon.Run(ctx, host, a.TalonSource)
+	next := sched.Next(now)
+	state.NextCronAt = &next
+	if err := e.mgr.SaveState(ctx, state); err != nil {
+		return fmt.Errorf("save state: %w", err)
+	}
+
+	started := now
+	run := agent.Run{AgentID: a.ID, TriggerType: agent.TriggerSchedule, StartedAt: &started, FinishedAt: &started}
+	if runErr != nil {
+		run.Status = agent.StatusFailed
+		run.Error = runErr.Error()
+		_, _ = e.mgr.CreateRun(ctx, run)
+		return runErr
+	}
+	run.Status = agent.StatusCompleted
+	run.Result = resultJSON(result)
+	_, _ = e.mgr.CreateRun(ctx, run)
+	return nil
 }
 
 // drainPending processes every queued webhook event: map its payload to a
@@ -153,9 +220,12 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
 	}
-	facts, registry, err := agent.Map(*pc, resp, state.EntityMap)
+	facts, registry, truncated, err := agent.Map(*pc, resp, state.EntityMap, e.cfg.MaxItemsPerPoll)
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
+	}
+	if truncated > 0 {
+		slog.Warn("opentalon-agents: poll result truncated", "agent", a.ID, "dropped", truncated, "max_items", e.cfg.MaxItemsPerPoll)
 	}
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
@@ -186,7 +256,8 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 // out, preserves the snapshot, and records a failed run.
 func (e *Engine) failAgent(ctx context.Context, a agent.Agent, state agent.AgentState, interval time.Duration, now time.Time, cause error) error {
 	state.ConsecutiveFailures++
-	next := now.Add(backoff(interval, state.ConsecutiveFailures))
+	cap := time.Duration(e.cfg.MaxBackoffSeconds) * time.Second
+	next := now.Add(backoff(interval, state.ConsecutiveFailures, cap))
 	state.NextPollAt = &next
 	if err := e.mgr.SaveState(ctx, state); err != nil {
 		slog.Warn("opentalon-agents: save state after failure", "agent", a.ID, "error", err)
@@ -225,17 +296,17 @@ func (e *Engine) pollInterval(pc *agent.PollConfig) time.Duration {
 	return d
 }
 
-// backoff is interval * 2^(failures-1), capped at maxBackoff.
-func backoff(interval time.Duration, failures int) time.Duration {
+// backoff is interval * 2^(failures-1), capped at cap.
+func backoff(interval time.Duration, failures int, cap time.Duration) time.Duration {
 	d := interval
 	for i := 1; i < failures; i++ {
 		d *= 2
-		if d >= maxBackoff {
-			return maxBackoff
+		if d >= cap {
+			return cap
 		}
 	}
-	if d > maxBackoff {
-		return maxBackoff
+	if d > cap {
+		return cap
 	}
 	return d
 }

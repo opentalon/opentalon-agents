@@ -191,7 +191,16 @@ Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` does
 - **Phase 1 — _shipped_**: plugin scaffold, SQLite/Postgres store + migrations, agent CRUD, inline `run` (validate via `check`, execute via `execute_workflow`).
 - **Phase 2 — _in progress_**: the watcher/tick engine. Tracked in [#1](https://github.com/opentalon/opentalon-agents/issues/1): poll trigger + state ([#3](https://github.com/opentalon/opentalon-agents/issues/3), [#4](https://github.com/opentalon/opentalon-agents/issues/4)), `talonproxy.Evaluate` ([#5](https://github.com/opentalon/opentalon-agents/issues/5)), poller/mapper/engine ([#6](https://github.com/opentalon/opentalon-agents/issues/6)–[#8](https://github.com/opentalon/opentalon-agents/issues/8)), tick + scheduler wiring ([#9](https://github.com/opentalon/opentalon-agents/issues/9)), prompt + E2E ([#10](https://github.com/opentalon/opentalon-agents/issues/10), [#11](https://github.com/opentalon/opentalon-agents/issues/11)). Depends on `talon-plugin`'s `evaluate` action (**done**, `v0.2.0`).
 - **Phase 3 — webhook triggers _implemented_**: push data instead of polling. Declare a `webhook` trigger (mapping only), set `expose_http: true` + a `webhook_secret`, and POST to the endpoint below. The handler enqueues into `pending_events`; the next tick drains and evaluates it (the HTTP request has no `HostCaller`, so evaluation is deferred to the tick).
-- **Phase 4**: cron triggers, full backoff, multi-entity pagination, polish ([#13](https://github.com/opentalon/opentalon-agents/issues/13)).
+- **Phase 4 — _implemented_** ([#13](https://github.com/opentalon/opentalon-agents/issues/13)): **`schedule` (cron) triggers** (one-shot `workflow` agent on a 5-field cron, tracked via `next_cron_at`, run through `execute_workflow`); **create-time trigger validation**; **multi-entity polls** — a poll trigger with `items_path` maps every element of a list to a fact (value_path/id_field per item), capped by `max_items_per_poll` (drops are logged, never silent); and a **configurable backoff cap** (`max_backoff_seconds`, default 30m).
+
+## Durability & restart
+
+The plugin holds **no in-memory agent state** — the engine is DB-driven. Every `agents.tick` re-queries the DB for enabled, due agents (poll / schedule / queued webhooks) and processes them. So after a plugin or host restart, agents resume automatically:
+
+- **agents** (source, triggers, enabled) and **agent_state** (`facts_snapshot_json`, `entity_map_json`, `next_poll_at`, `next_cron_at`, `consecutive_failures`) are persisted; each `evaluate` re-hydrates the Session from the snapshot, so an unchanged value fires nothing (no false re-fires on restart).
+- **pending_events** (queued webhooks) survive and drain on the next tick.
+
+The only external requirement is that the host keeps firing `agents.tick` — its `scheduler.jobs` entry lives in host config (dynamic jobs persist in `dataDir/scheduler/jobs.yaml`), so it resumes on host restart too. Nothing needs to "bring agents back online."
 
 ## Webhooks
 

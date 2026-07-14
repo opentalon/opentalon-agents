@@ -10,7 +10,7 @@ Actions (all scoped to the current group):
 For Talon syntax (workflows, on-blocks, `when`, facts, mcp steps, step("...").result), follow the Talon-language guidance from the talon plugin — it is authoritative. This section is about assembling an AGENT.
 
 TWO KINDS OF AGENT
-1. One-shot / batch — a plain `workflow` you trigger with run(id) (or later a schedule). Good for "do X across N items now".
+1. One-shot / batch — a plain `workflow` you trigger with run(id), or on a cron via a `schedule` trigger: [{"type":"schedule","cron":"0 9 * * 1-5"}] (standard 5-field cron; runs the workflow at those times). Good for "do X every morning / across N items now".
 2. Watcher — reacts to data changing over time: an `on`-block that fires a workflow when a value crosses a threshold, fed by a `poll` trigger. This is the shape for "monitor X and when Y happens, do Z".
 
 AUTHORING A WATCHER
@@ -47,6 +47,7 @@ poll config fields:
 - value_path — dot-path to the watched value in the tool's response.
 - id_field — dot-path to the entity's id (so multiple items stay distinct). Omit for a single watched thing.
 - attribute — the fact attribute name. **It MUST match the `attr` in your `on change attr "..."` block** (here, "current_stock").
+- items_path — OPTIONAL. To watch MANY entities from one poll, set this to the dot-path of the list in the response; value_path/id_field are then read from EACH item. The same on-block fires per item that crosses.
 
 PUSH INSTEAD OF POLL (webhook)
 Instead of polling, an external system can PUSH data. Use a `webhook` trigger — same `on`-block source, but the trigger carries just the mapping (no server/tool/interval):
