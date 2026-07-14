@@ -1,41 +1,196 @@
 # opentalon-agents
 
-OpenTalon plugin: **persistent, LLM-authored automations written in the Talon language.** Describe a task in chat; the LLM authors it as Talon source; the plugin validates and stores it, and runs it deterministically — no model in the loop at run time.
+OpenTalon plugin for **persistent, LLM-authored automations written in the [Talon](https://github.com/opentalon/talon-language) language.**
+
+A user describes a task in chat — *"monitor the stock item with barcode ABC-123; when stock drops below 10, open a refill ticket"* — the LLM authors it **as Talon source**, and this plugin stores it and runs it **deterministically and autonomously**: no model in the loop at run time.
+
+> **Status.** Phase 1 (create/validate/run agents) is shipped. The autonomous watcher engine (polling + reactive evaluation) is Phase 2, in progress — see [Roadmap](#roadmap). The design below is the target; sections are marked _shipped_ / _planned_.
+
+---
+
+## Why Talon (and not the LLM) at run time
+
+The LLM is great at *authoring* an automation from a fuzzy request, but you don't want a model re-deciding what to do every 5 minutes forever. So the LLM writes the logic **once**, in Talon — a small deterministic language — and from then on the plugin executes it mechanically. Authoring is probabilistic; running is deterministic and cheap.
+
+---
 
 ## Architecture
 
-- **This plugin owns the agent**: it stores each agent's Talon source + triggers, records runs, and (from Phase 2) watches data on a schedule. State lives in its own SQLite/Postgres store.
-- **It links no `talon-language` code.** The language is reached purely as a runtime proxy: during a bidi call the plugin invokes `host.RunAction("talon-plugin", …)` — `check` to validate source, `execute_workflow` to run it. `talon-plugin` stays a generic, agent-agnostic language gateway.
-- Because reaching talon-plugin needs a live `HostCaller`, the plugin advertises `supports_callbacks: true` and handles every action on the bidi path.
+`opentalon-agents` is an **external gRPC plugin**. It owns everything about an agent — the stored Talon source, triggers, run history, and watcher state — in its own SQLite/Postgres store. It **links no `talon-language` code at all**: it reaches the language only by calling **`talon-plugin`** actions *through the host*. And it doesn't run its own scheduler — it rides the host's.
 
-## Actions (LLM-visible)
+```mermaid
+flowchart LR
+  U["User (chat)"] -->|create / run| O
+  SCHED["host scheduler<br/>(agents.tick every 1m)"] --> O
 
-`create` · `list` · `show` · `run` · `update` · `enable` · `disable` · `delete`
+  subgraph HOST["opentalon host"]
+    O["Orchestrator<br/>(dispatch + credentials)"]
+  end
 
-`create`/`update` validate the Talon source via `talon-plugin.check` before storing — invalid source is rejected with diagnostics. `run` executes the stored source via `talon-plugin.execute_workflow` and records a run.
+  O <-->|gRPC bidi + HostCaller| A["opentalon-agents<br/>(agent logic + state)"]
+  A --> DB[("SQLite / Postgres<br/>agents · runs · state")]
 
-## Status
+  A -.->|"host.RunAction<br/>check / evaluate"| T["talon-plugin<br/>(generic language gateway)"]
+  T -.-> LANG[["Talon language<br/>Session · on-blocks"]]
+  A -.->|"host.RunAction<br/>poll / act"| MCP["MCP servers<br/>(inventory, tickets, …)"]
+  T -.->|"MCP steps in fired workflows"| MCP
+```
 
-**Phase 1** (this release): scaffold, store + migrations, CRUD, and inline `run`. Schedules, polls, webhooks, and the autonomous tick engine follow in Phases 2–4 (some gated on `talon-language` #126–128).
+**Separation of concerns**
 
-## Config
+| Piece | Responsibility |
+|-------|----------------|
+| **opentalon-agents** | Agent lifecycle & state: store Talon source + triggers, poll, map data → facts, keep the fact snapshot, record runs. All "agent" logic lives here. |
+| **talon-plugin** | A *generic, agent-agnostic* gateway to the Talon language. Exposes `check` (validate source) and `evaluate` (reactively run source against facts). Knows nothing about agents. |
+| **opentalon host** | Loads plugins, exposes their actions to the LLM, dispatches calls (with credentials), and fires the periodic `tick` via its scheduler. |
 
-Delivered by the host via `OPENTALON_CONFIG`:
+---
+
+## How the host invokes this plugin
+
+Nothing is hardcoded in core — the host learns about the plugin from config, then drives it two ways.
+
+**1. Registration** — declare it in the host `config.yaml`. On startup the host launches the binary and calls `Capabilities()`, which advertises the capability name `agents`, its actions, the authoring prompt, and `supports_callbacks: true`.
 
 ```yaml
 plugins:
   agents:
     enabled: true
-    github: "opentalon/opentalon-agents"
-    ref: "master"
+    plugin: "./plugins/opentalon-agents/opentalon-agents"   # or github/ref
     config:
-      db:
-        driver: sqlite          # or "postgres"
-        dsn: "./agents.db"      # sqlite path, or postgres URL
-      talon_plugin_name: talon-plugin   # capability name of the loaded talon-plugin
+      db: { driver: sqlite, dsn: ./agents.db }
+      talon_plugin_name: talon-plugin
+  talon-plugin:
+    enabled: true
+    github: opentalon/talon-plugin
+    ref: v0.2.0        # provides `check` + `evaluate`
+
+scheduler:
+  jobs:
+    - name: agents-tick
+      interval: "1m"
+      action: agents.tick     # <capability-name>.<action>
 ```
 
-Requires `talon-plugin` (with the `check` action) to be loaded in the same host.
+**2. LLM-initiated** _(shipped)_ — the advertised actions become tools (`agents.create`, `agents.run`, …). When the user asks for an automation, the LLM calls `agents.create`; because we declare `supports_callbacks`, the host dispatches over **ExecuteBidi**, so our handler gets a **live `HostCaller`** to reach `talon-plugin`.
+
+**3. Autonomous tick** _(planned — Phase 2)_ — the LLM is *not* involved. The `scheduler.jobs` entry fires `agents.tick` on a timer; the scheduler calls it through the orchestrator, again over bidi with a live `HostCaller`. The tick is **unscoped** (no user/group), so it sweeps all agents system-wide.
+
+---
+
+## A real example: the stock watcher
+
+**In chat:** *"Create an agent that watches stock item barcode ABC-123 and opens a refill ticket when it drops below 10."*
+
+The LLM calls **`agents.create`** with a name, the Talon source, and a poll trigger:
+
+**`talon_source`** — the logic, authored by the LLM:
+
+```talon
+# React to changes in an item's stock. Fire ONCE on the downward crossing
+# below 10 (prev >= 10 and new < 10) — not every tick while it stays low.
+on change attr "current_stock" {
+  when prev_value >= 10 and new_value < 10
+  workflow "Refill stock"
+}
+
+# The action that runs when the on-block fires.
+workflow "Refill stock" {
+  step "ticket" {
+    mcp "tickets" "create" {
+      title "Refill needed for ABC-123"
+      item  step("trigger").result.entity     # the item that crossed the threshold
+      qty   50
+    }
+  }
+}
+```
+
+**`triggers`** — how the engine feeds it data (structured config, also from the LLM):
+
+```json
+[
+  {
+    "type": "poll",
+    "config": {
+      "server": "inventory",
+      "tool": "get-item",
+      "args": { "barcode": "ABC-123" },
+      "interval": "5m",
+      "value_path": "item.current_stock",
+      "id_field": "item.barcode",
+      "attribute": "current_stock"
+    }
+  }
+]
+```
+
+On `create`, the source is validated (`talon-plugin.check`) before it's stored — invalid Talon is rejected with compile diagnostics so the LLM can fix and retry.
+
+---
+
+## What happens on each tick — and where facts come in
+
+A **fact** is an EAV triple: *(entity, attribute, value)* — e.g. *(item ABC-123, `current_stock`, 8)*. The watcher works by turning each poll into a fact and letting Talon's `Session` react to **changes** in that fact. The **snapshot** is the set of facts the agent remembers between ticks; it's what makes the watcher *edge-triggered* (fire once on the crossing) and *restart-safe* (a value that hasn't changed since last time fires nothing).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as host scheduler
+  participant O as orchestrator
+  participant A as opentalon-agents
+  participant M as inventory MCP
+  participant T as talon-plugin
+
+  S->>O: RunAction(agents.tick)
+  O->>A: ExecuteBidi(tick) + live HostCaller
+  Note over A: find agents whose poll is due
+  A->>O: RunAction(inventory.get-item {barcode: ABC-123})
+  O->>M: get-item
+  M-->>A: { item: { barcode: "ABC-123", current_stock: 8 } }
+  Note over A: MAP — extract value_path (8),<br/>barcode → entity id 1 (registry),<br/>build Fact{1, current_stock, 8}
+  A->>O: RunAction(talon-plugin.evaluate<br/>{source, snapshot:{1:{current_stock:15}}, facts:[{1,current_stock,8}]})
+  O->>T: ExecuteBidi(evaluate) + live HostCaller
+  Note over T: hydrate Session from snapshot (15),<br/>Assert(8): 15→8 crosses < 10 → on-block fires
+  T->>O: RunAction(tickets.create {title, item, qty})
+  O-->>T: ok
+  T-->>A: { firings: ["Refill stock"], snapshot: {1:{current_stock:8}} }
+  Note over A: persist snapshot + next_poll_at,<br/>record a run
+```
+
+Step by step:
+
+1. **Poll** — the engine calls the item's MCP tool through the host: `inventory.get-item{barcode: ABC-123}` → `{ "item": { "current_stock": 8 } }`.
+2. **Map → fact** — it extracts the value at `value_path` (`8`), maps the external id (`ABC-123`) to a small integer via a per-agent registry, and builds a fact: `Fact{RecordID: "1", Attribute: "current_stock", Value: 8}`. *(The int mapping is required because Talon's snapshot is keyed by integer entity id.)*
+3. **Evaluate** — it calls `talon-plugin.evaluate` with the stored `source`, the prior `snapshot` (last known stock, e.g. 15), and the new `facts`. talon-plugin hydrates a `Session` from the snapshot, asserts the new fact, and the `on change` block sees `15 → 8`: the `when prev_value >= 10 and new_value < 10` guard holds, so it fires and runs `"Refill stock"` — whose `mcp "tickets" "create"` step is dispatched back through the host.
+4. **Persist** — the engine stores the returned snapshot (`current_stock: 8`), schedules the next poll, and records a run.
+
+Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` doesn't re-fire (it didn't cross *down through* 10 again); only a fresh `≥10 → <10` transition opens another ticket. Restart is safe too — the snapshot is reloaded from the DB, so replaying the last value fires nothing.
+
+---
+
+## Actions
+
+| Action | Description |
+|--------|-------------|
+| `create` | Author an agent from Talon source (+ optional triggers). Validated via `talon-plugin.check` before storing. |
+| `list` / `show` | Inspect agents (`show` returns the full Talon source). |
+| `run` | Execute an agent's program now (inline) and return the result. _shipped_ |
+| `update` | Replace the Talon source / triggers (re-validated). |
+| `enable` / `disable` / `delete` | Lifecycle. |
+| `tick` | Hidden (`UserOnly`) — fired by the host scheduler to drive watchers. _planned (Phase 2)_ |
+
+`group_id` / `entity_id` are injected by the host per call; every operation is group-scoped. All actions run on the bidi path (a live `HostCaller` is needed to reach `talon-plugin`).
+
+---
+
+## Roadmap
+
+- **Phase 1 — _shipped_**: plugin scaffold, SQLite/Postgres store + migrations, agent CRUD, inline `run` (validate via `check`, execute via `execute_workflow`).
+- **Phase 2 — _in progress_**: the watcher/tick engine. Tracked in [#1](https://github.com/opentalon/opentalon-agents/issues/1): poll trigger + state ([#3](https://github.com/opentalon/opentalon-agents/issues/3), [#4](https://github.com/opentalon/opentalon-agents/issues/4)), `talonproxy.Evaluate` ([#5](https://github.com/opentalon/opentalon-agents/issues/5)), poller/mapper/engine ([#6](https://github.com/opentalon/opentalon-agents/issues/6)–[#8](https://github.com/opentalon/opentalon-agents/issues/8)), tick + scheduler wiring ([#9](https://github.com/opentalon/opentalon-agents/issues/9)), prompt + E2E ([#10](https://github.com/opentalon/opentalon-agents/issues/10), [#11](https://github.com/opentalon/opentalon-agents/issues/11)). Depends on `talon-plugin`'s `evaluate` action (**done**, `v0.2.0`).
+- **Phase 3/4**: webhook triggers + queue + proxied HTTP ([#12](https://github.com/opentalon/opentalon-agents/issues/12)); cron triggers, full backoff, pagination, polish ([#13](https://github.com/opentalon/opentalon-agents/issues/13)).
+
+---
 
 ## Develop
 
@@ -44,3 +199,5 @@ make build   # build the plugin binary
 make test    # unit tests (store round-trip; action layer with a fake HostCaller)
 make vet
 ```
+
+Requires `talon-plugin` (≥ `v0.2.0`, provides `check` + `evaluate`) loaded in the same host. `opentalon-agents` itself imports **no** `talon-language` — all language access is via `host.RunAction("talon-plugin", …)`.
