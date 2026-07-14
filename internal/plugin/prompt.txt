@@ -1,13 +1,54 @@
-Persistent agents: automations you author once in the Talon language, that are stored and run deterministically — no model in the loop at run time.
+Persistent agents: automations the user describes in chat, that you author ONCE in the Talon language and store here. They then run deterministically and autonomously — no model in the loop at run time.
 
-Use these actions to manage agents for the current group:
-- create(name, talon_source, [description], [triggers]) — author a new agent. The Talon source is validated before it is stored; if it is invalid you get compile diagnostics back — fix the source and retry.
+Actions (all scoped to the current group):
+- create(name, talon_source, [description], [triggers]) — author a new agent. talon_source is validated before storing; if invalid you get compile diagnostics back — fix and retry. Ask the user for a short name if they didn't give one.
 - list / show(id) — inspect agents (show returns the full Talon source).
-- run(id) — execute an agent's program now and return the result.
-- update(id, talon_source, [triggers]) — replace the program (re-validated).
+- run(id) — execute an agent's program now and return the result (good for testing).
+- update(id, talon_source, [triggers]) — replace the program/triggers (re-validated).
 - enable(id) / disable(id) / delete(id) — lifecycle.
 
-Authoring notes:
-- talon_source is Talon, the same language talon-plugin executes. Write a `workflow "..." { step "..." { mcp "<server>" "<tool>" { ... } } }` program; MCP steps run through the host, exactly as talon-plugin runs them.
-- triggers is an optional JSON array, e.g. [{"type":"schedule","cron":"0 9 * * 1-5"}]. Trigger types: manual, schedule, poll, webhook. Triggers are stored now and become active in a later phase; for now, drive agents with run(id).
-- Keep one clear task per agent. Validate by creating (invalid source is rejected) or by run(id).
+For Talon syntax (workflows, on-blocks, `when`, facts, mcp steps, step("...").result), follow the Talon-language guidance from the talon plugin — it is authoritative. This section is about assembling an AGENT.
+
+TWO KINDS OF AGENT
+1. One-shot / batch — a plain `workflow` you trigger with run(id) (or later a schedule). Good for "do X across N items now".
+2. Watcher — reacts to data changing over time: an `on`-block that fires a workflow when a value crosses a threshold, fed by a `poll` trigger. This is the shape for "monitor X and when Y happens, do Z".
+
+AUTHORING A WATCHER
+A watcher has two parts you provide together:
+
+(a) talon_source — an `on change attr "<attr>"` block guarded by a `when`, firing a workflow that does the action. Use the fire-ONCE crossing guard so it acts on the transition, not every tick:
+
+  on change attr "current_stock" {
+    when prev_value >= 10 and new_value < 10
+    workflow "Refill stock"
+  }
+  workflow "Refill stock" {
+    step "ticket" {
+      mcp "tickets" "create" {
+        item step("trigger").result.entity
+        qty  50
+      }
+    }
+  }
+
+(b) triggers — a JSON array with a `poll` entry telling the engine WHAT to fetch each interval and HOW to turn it into the fact the on-block watches:
+
+  [{"type":"poll","config":{
+    "server":"inventory","tool":"get-item","args":{"barcode":"ABC-123"},
+    "interval":"5m",
+    "value_path":"item.current_stock",
+    "id_field":"item.barcode",
+    "attribute":"current_stock"
+  }}]
+
+poll config fields:
+- server / tool / args — the MCP tool to call and its static arguments.
+- interval — how often, as a Go duration ("30s","5m","1h").
+- value_path — dot-path to the watched value in the tool's response.
+- id_field — dot-path to the entity's id (so multiple items stay distinct). Omit for a single watched thing.
+- attribute — the fact attribute name. **It MUST match the `attr` in your `on change attr "..."` block** (here, "current_stock").
+
+RULES
+- The `when` threshold must be a literal number (you can't compare against another fact). Bake the user's number in.
+- Keep one clear task per agent.
+- Validate by create (invalid Talon is rejected with diagnostics) or by run(id).
