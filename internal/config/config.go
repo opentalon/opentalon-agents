@@ -27,6 +27,11 @@ type Config struct {
 	// Phase 1 (no tick engine yet); parsed now so the schema is stable.
 	PollFloorSeconds int `json:"poll_floor_seconds"`
 	MaxItemsPerPoll  int `json:"max_items_per_poll"`
+
+	// WebhookSecret is the shared bearer token gating the webhook HTTP
+	// endpoint (Authorization: Bearer <secret>). Empty disables the
+	// endpoint entirely — we refuse to serve an unauthenticated ingress.
+	WebhookSecret string `json:"webhook_secret"`
 }
 
 // DBConfig selects the storage backend.

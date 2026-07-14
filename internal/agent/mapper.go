@@ -25,30 +25,36 @@ type Fact struct {
 // v1 handles a single watched entity per poll — the stock-watcher shape.
 // Multi-entity list responses (+ max-items) are a later phase.
 func Map(pc PollConfig, response any, registry map[string]int) ([]Fact, map[string]int, error) {
+	return MapValue(pc.ValuePath, pc.IDField, pc.Attribute, response, registry)
+}
+
+// MapValue extracts one fact from a decoded response given a mapping spec
+// (value_path / id_field / attribute). It is shared by poll and webhook
+// triggers. The external id is mapped to a stable int via the registry.
+func MapValue(valuePath, idField, attribute string, response any, registry map[string]int) ([]Fact, map[string]int, error) {
 	if registry == nil {
 		registry = map[string]int{}
 	}
 
-	val, ok := dotPath(response, pc.ValuePath)
+	val, ok := dotPath(response, valuePath)
 	if !ok {
-		return nil, registry, fmt.Errorf("mapper: value_path %q not found in poll response", pc.ValuePath)
+		return nil, registry, fmt.Errorf("mapper: value_path %q not found in response", valuePath)
 	}
 
 	extID := "self" // single implicit entity when no id_field is given
-	if pc.IDField != "" {
-		idv, ok := dotPath(response, pc.IDField)
+	if idField != "" {
+		idv, ok := dotPath(response, idField)
 		if !ok {
-			return nil, registry, fmt.Errorf("mapper: id_field %q not found in poll response", pc.IDField)
+			return nil, registry, fmt.Errorf("mapper: id_field %q not found in response", idField)
 		}
 		extID = fmt.Sprintf("%v", idv)
 	}
 
-	attr := pc.Attribute
-	if attr == "" {
-		attr = "value"
+	if attribute == "" {
+		attribute = "value"
 	}
 	id := assignEntityID(registry, extID)
-	return []Fact{{RecordID: strconv.Itoa(id), Attribute: attr, Value: val}}, registry, nil
+	return []Fact{{RecordID: strconv.Itoa(id), Attribute: attribute, Value: val}}, registry, nil
 }
 
 // assignEntityID returns the stable int id for an external id, assigning a

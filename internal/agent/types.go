@@ -85,6 +85,55 @@ func (a Agent) PollTrigger() (*PollConfig, bool) {
 	return nil, false
 }
 
+// WebhookConfig is the `config` payload of a webhook trigger. An external
+// system POSTs a JSON body to /v1/hooks/<agent> (authenticated by the
+// caller's bearer token); the body is mapped to a fact
+// (value_path/id_field/attribute, same as poll) and evaluated on the next
+// tick.
+type WebhookConfig struct {
+	ValuePath string `json:"value_path"`         // dot-path to the watched value in the POST body
+	IDField   string `json:"id_field,omitempty"` // dot-path to the entity id
+	Attribute string `json:"attribute"`          // fact attribute name
+}
+
+// Webhook decodes the trigger's Config as a WebhookConfig.
+func (t Trigger) Webhook() (*WebhookConfig, error) {
+	if t.Type != TriggerWebhook {
+		return nil, fmt.Errorf("trigger is %q, not a webhook trigger", t.Type)
+	}
+	var c WebhookConfig
+	if err := json.Unmarshal(t.Config, &c); err != nil {
+		return nil, fmt.Errorf("decode webhook config: %w", err)
+	}
+	return &c, nil
+}
+
+// WebhookTrigger returns the agent's first webhook trigger config, if any.
+func (a Agent) WebhookTrigger() (*WebhookConfig, bool) {
+	for _, t := range a.Triggers {
+		if t.Type == TriggerWebhook {
+			if c, err := t.Webhook(); err == nil {
+				return c, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// PendingEvent is a queued webhook delivery awaiting the next tick, stored
+// in the pending_events table. The HTTP handler that receives a webhook
+// has no HostCaller, so it can only enqueue; the tick drains and evaluates.
+type PendingEvent struct {
+	ID         string          `json:"id"`
+	AgentID    string          `json:"agent_id"`
+	Kind       string          `json:"kind"` // "facts"
+	Payload    json.RawMessage `json:"payload"`
+	ReceivedAt time.Time       `json:"received_at"`
+}
+
+// PendingEvent kinds.
+const EventKindFacts = "facts"
+
 // Run is one execution of an agent.
 type Run struct {
 	ID          string          `json:"id"`
@@ -112,6 +161,41 @@ const (
 type RunContext struct {
 	GroupID  string
 	EntityID string
+}
+
+// AgentSummary is the list-view of an agent — everything but the full
+// Talon source. Returned by the query API.
+type AgentSummary struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description,omitempty"`
+	GroupID      string    `json:"group_id"`
+	EntityID     string    `json:"entity_id,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	TriggerTypes []string  `json:"trigger_types"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// Summary returns the agent's list-view (omits the Talon source).
+func (a Agent) Summary() AgentSummary {
+	types := make([]string, 0, len(a.Triggers))
+	for _, t := range a.Triggers {
+		types = append(types, t.Type)
+	}
+	return AgentSummary{
+		ID: a.ID, Name: a.Name, Description: a.Description,
+		GroupID: a.GroupID, EntityID: a.EntityID, Enabled: a.Enabled,
+		TriggerTypes: types, UpdatedAt: a.UpdatedAt,
+	}
+}
+
+// AgentFilter selects agents for QueryAgents. Empty fields are ignored;
+// set fields are AND-combined.
+type AgentFilter struct {
+	GroupID      string
+	EntityID     string
+	NameContains string // case-insensitive substring match on name
+	Enabled      *bool
 }
 
 // AgentState is the restart-safe watcher state for one agent (Phase 2),

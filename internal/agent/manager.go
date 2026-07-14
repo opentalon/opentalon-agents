@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/opentalon/opentalon-agents/internal/store"
 )
@@ -319,6 +321,136 @@ func scanAgentWithNextPoll(s scanner) (Agent, *time.Time, error) {
 	a.CreatedAt, _ = time.Parse(timeFmt, created)
 	a.UpdatedAt, _ = time.Parse(timeFmt, updated)
 	return a, parseNullTime(nextPoll), nil
+}
+
+// QueryAgents lists agents matching the filter (all fields AND-combined),
+// newest first. Used by the read-only query API.
+func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, error) {
+	q := `SELECT id, name, description, group_id, entity_id, talon_source,
+		triggers_json, enabled, created_at, updated_at FROM agents WHERE 1=1`
+	var args []any
+	if f.GroupID != "" {
+		q += " AND group_id = ?"
+		args = append(args, f.GroupID)
+	}
+	if f.EntityID != "" {
+		q += " AND entity_id = ?"
+		args = append(args, f.EntityID)
+	}
+	if f.NameContains != "" {
+		q += " AND LOWER(name) LIKE ?"
+		args = append(args, "%"+strings.ToLower(f.NameContains)+"%")
+	}
+	if f.Enabled != nil {
+		q += " AND enabled = ?"
+		args = append(args, boolToInt(*f.Enabled))
+	}
+	q += " ORDER BY created_at DESC"
+
+	rows, err := m.db.SQL().QueryContext(ctx, m.db.Dialect.Rebind(q), args...)
+	if err != nil {
+		return nil, fmt.Errorf("agent query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Agent
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// GetByID resolves an agent by id across all groups (used by the tick
+// engine, which is unscoped).
+func (m *Manager) GetByID(ctx context.Context, id string) (Agent, error) {
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, talon_source,
+		triggers_json, enabled, created_at, updated_at FROM agents WHERE id = ? LIMIT 1`)
+	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Agent{}, ErrNotFound
+	}
+	return a, err
+}
+
+// WebhookAgent resolves the enabled, webhook-triggered agent named by
+// idOrName and owned by userID (its entity_id). Used by the webhook
+// endpoint, which authenticates via a shared bearer secret and scopes the
+// lookup by the request's user_id param.
+func (m *Manager) WebhookAgent(ctx context.Context, userID, idOrName string) (Agent, error) {
+	if userID == "" || idOrName == "" {
+		return Agent{}, ErrNotFound
+	}
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, talon_source,
+		triggers_json, enabled, created_at, updated_at FROM agents
+		WHERE enabled = 1 AND entity_id = ? AND (id = ? OR name = ?) LIMIT 1`)
+	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, userID, idOrName, idOrName))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Agent{}, ErrNotFound
+	}
+	if err != nil {
+		return Agent{}, err
+	}
+	if _, ok := a.WebhookTrigger(); !ok {
+		return Agent{}, ErrNotFound // exists but isn't webhook-triggered
+	}
+	return a, nil
+}
+
+// EnqueueEvent stores a pending webhook delivery for later draining.
+func (m *Manager) EnqueueEvent(ctx context.Context, ev PendingEvent) (PendingEvent, error) {
+	ev.ID = uuid.NewString()
+	ev.ReceivedAt = time.Now().UTC()
+	if ev.Kind == "" {
+		ev.Kind = EventKindFacts
+	}
+	payload := string(ev.Payload)
+	if payload == "" {
+		payload = "{}"
+	}
+	q := m.db.Dialect.Rebind(`INSERT INTO pending_events (id, agent_id, kind, payload_json, received_at)
+		VALUES (?, ?, ?, ?, ?)`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, ev.ID, ev.AgentID, ev.Kind, payload, ev.ReceivedAt.Format(timeFmt)); err != nil {
+		return PendingEvent{}, fmt.Errorf("enqueue event: %w", err)
+	}
+	return ev, nil
+}
+
+// ListPendingEvents returns all queued events, oldest first.
+func (m *Manager) ListPendingEvents(ctx context.Context) ([]PendingEvent, error) {
+	q := m.db.Dialect.Rebind(`SELECT id, agent_id, kind, payload_json, received_at
+		FROM pending_events ORDER BY received_at ASC`)
+	rows, err := m.db.SQL().QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list pending events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PendingEvent
+	for rows.Next() {
+		var (
+			ev       PendingEvent
+			payload  string
+			received string
+		)
+		if err := rows.Scan(&ev.ID, &ev.AgentID, &ev.Kind, &payload, &received); err != nil {
+			return nil, err
+		}
+		ev.Payload = json.RawMessage(payload)
+		ev.ReceivedAt, _ = time.Parse(timeFmt, received)
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+// DeleteEvent removes a pending event after it has been processed.
+func (m *Manager) DeleteEvent(ctx context.Context, id string) error {
+	q := m.db.Dialect.Rebind(`DELETE FROM pending_events WHERE id = ?`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, id); err != nil {
+		return fmt.Errorf("delete event: %w", err)
+	}
+	return nil
 }
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.

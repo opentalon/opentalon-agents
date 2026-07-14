@@ -123,6 +123,26 @@ func TestLifecycle_EnableDisableDelete(t *testing.T) {
 	}
 }
 
+func TestCreate_StoresUserRequestAsDescription(t *testing.T) {
+	ctx := context.Background()
+	h := testHandler(t)
+	host := &scriptHost{checkOK: true}
+	want := "watch stock ABC-123 and open a refill ticket when it drops below 10"
+	if resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "c", Action: "create",
+		Args: ctxArgs(map[string]string{"name": "restock", "description": want, "talon_source": `workflow "x" {}`})}, host); resp.Error != "" {
+		t.Fatalf("create: %q", resp.Error)
+	}
+	a, _ := h.mgr.Get(ctx, "g1", "restock")
+	if a.Description != want {
+		t.Errorf("description not stored: %q", a.Description)
+	}
+	// show surfaces it back.
+	show := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "s", Action: "show", Args: ctxArgs(map[string]string{"id": "restock"})}, host)
+	if !strings.Contains(show.StructuredContent, "drops below 10") {
+		t.Errorf("show should include the user's request: %s", show.StructuredContent)
+	}
+}
+
 func TestShow_IncludesSource(t *testing.T) {
 	h := testHandler(t)
 	host := &scriptHost{checkOK: true}

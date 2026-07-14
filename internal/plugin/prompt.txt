@@ -1,7 +1,7 @@
 Persistent agents: automations the user describes in chat, that you author ONCE in the Talon language and store here. They then run deterministically and autonomously — no model in the loop at run time.
 
 Actions (all scoped to the current group):
-- create(name, talon_source, [description], [triggers]) — author a new agent. talon_source is validated before storing; if invalid you get compile diagnostics back — fix and retry. Ask the user for a short name if they didn't give one.
+- create(name, description, talon_source, [triggers]) — author a new agent. Set `description` to the USER'S ORIGINAL REQUEST in their own words (what they asked for), not a paraphrase of the Talon — this is how the human intent is preserved. Ask for a short name if they didn't give one. talon_source is validated before storing; if invalid you get compile diagnostics back — fix and retry.
 - list / show(id) — inspect agents (show returns the full Talon source).
 - run(id) — execute an agent's program now and return the result (good for testing).
 - update(id, talon_source, [triggers]) — replace the program/triggers (re-validated).
@@ -48,7 +48,15 @@ poll config fields:
 - id_field — dot-path to the entity's id (so multiple items stay distinct). Omit for a single watched thing.
 - attribute — the fact attribute name. **It MUST match the `attr` in your `on change attr "..."` block** (here, "current_stock").
 
+PUSH INSTEAD OF POLL (webhook)
+Instead of polling, an external system can PUSH data. Use a `webhook` trigger — same `on`-block source, but the trigger carries just the mapping (no server/tool/interval):
+
+  [{"type":"webhook","config":{"value_path":"stock","id_field":"barcode","attribute":"current_stock"}}]
+
+The system then POSTs the data to `/v1/hooks/<agent-name>?user_id=<the user>` with header `Authorization: Bearer <webhook_secret>` (a shared secret the operator configures). The body is mapped to a fact exactly like a poll and evaluated on the next tick. Tell the user this URL if they want to drive the agent by webhook.
+
 RULES
 - The `when` threshold must be a literal number (you can't compare against another fact). Bake the user's number in.
+- The poll/webhook `attribute` MUST match the `attr` in your `on change attr "..."` block.
 - Keep one clear task per agent.
 - Validate by create (invalid Talon is rejected with diagnostics) or by run(id).
