@@ -196,6 +196,131 @@ func (m *Manager) ListRuns(ctx context.Context, agentID string, limit int) ([]Ru
 	return out, rows.Err()
 }
 
+// GetState returns the watcher state for an agent. When no row exists yet
+// (the agent has never ticked), it returns a zero state (with AgentID and
+// an empty EntityMap) and a nil error — callers treat "no state" as the
+// initial state.
+func (m *Manager) GetState(ctx context.Context, agentID string) (AgentState, error) {
+	q := m.db.Dialect.Rebind(`SELECT facts_snapshot_json, entity_map_json, next_poll_at, next_cron_at,
+		consecutive_failures FROM agent_state WHERE agent_id = ?`)
+	var (
+		snap, em string
+		np, nc   sql.NullString
+		failures int
+	)
+	err := m.db.SQL().QueryRowContext(ctx, q, agentID).Scan(&snap, &em, &np, &nc, &failures)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AgentState{AgentID: agentID, EntityMap: map[string]int{}}, nil
+	}
+	if err != nil {
+		return AgentState{}, fmt.Errorf("agent state get: %w", err)
+	}
+	st := AgentState{
+		AgentID:             agentID,
+		ConsecutiveFailures: failures,
+		NextPollAt:          parseNullTime(np),
+		NextCronAt:          parseNullTime(nc),
+		EntityMap:           map[string]int{},
+	}
+	if snap != "" {
+		st.FactsSnapshot = json.RawMessage(snap)
+	}
+	if em != "" {
+		if err := json.Unmarshal([]byte(em), &st.EntityMap); err != nil {
+			return AgentState{}, fmt.Errorf("agent state get: decode entity_map: %w", err)
+		}
+	}
+	return st, nil
+}
+
+// SaveState upserts an agent's watcher state (one row per agent).
+func (m *Manager) SaveState(ctx context.Context, s AgentState) error {
+	snap := string(s.FactsSnapshot)
+	if snap == "" {
+		snap = "{}"
+	}
+	em, err := json.Marshal(s.EntityMap)
+	if err != nil {
+		return fmt.Errorf("agent state save: encode entity_map: %w", err)
+	}
+	if s.EntityMap == nil {
+		em = []byte("{}")
+	}
+	q := m.db.Dialect.Rebind(`INSERT INTO agent_state
+		(agent_id, facts_snapshot_json, entity_map_json, next_poll_at, next_cron_at, consecutive_failures)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			facts_snapshot_json = excluded.facts_snapshot_json,
+			entity_map_json = excluded.entity_map_json,
+			next_poll_at = excluded.next_poll_at,
+			next_cron_at = excluded.next_cron_at,
+			consecutive_failures = excluded.consecutive_failures`)
+	_, err = m.db.SQL().ExecContext(ctx, q,
+		s.AgentID, snap, string(em), nullTime(s.NextPollAt), nullTime(s.NextCronAt), s.ConsecutiveFailures)
+	if err != nil {
+		return fmt.Errorf("agent state save: %w", err)
+	}
+	return nil
+}
+
+// ListEnabledPollDue returns enabled agents that have a poll trigger which
+// is due (no state yet, or next_poll_at <= now), across ALL groups — the
+// tick is a system-wide, unscoped sweep. Whether a trigger is a poll and
+// its due-time are checked in Go against the per-agent state join.
+func (m *Manager) ListEnabledPollDue(ctx context.Context, now time.Time) ([]Agent, error) {
+	q := m.db.Dialect.Rebind(`SELECT a.id, a.name, a.description, a.group_id, a.entity_id, a.talon_source,
+		a.triggers_json, a.enabled, a.created_at, a.updated_at, s.next_poll_at
+		FROM agents a LEFT JOIN agent_state s ON s.agent_id = a.id
+		WHERE a.enabled = 1`)
+	rows, err := m.db.SQL().QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("agent list poll-due: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Agent
+	for rows.Next() {
+		a, nextPoll, err := scanAgentWithNextPoll(rows)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := a.PollTrigger(); !ok {
+			continue // no poll trigger — not our concern here
+		}
+		due := nextPoll == nil || !nextPoll.After(now)
+		if due {
+			out = append(out, a)
+		}
+	}
+	return out, rows.Err()
+}
+
+// scanAgentWithNextPoll scans the agent columns plus the joined
+// agent_state.next_poll_at (nullable).
+func scanAgentWithNextPoll(s scanner) (Agent, *time.Time, error) {
+	var (
+		a        Agent
+		triggers string
+		enabled  int
+		created  string
+		updated  string
+		nextPoll sql.NullString
+	)
+	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TalonSource,
+		&triggers, &enabled, &created, &updated, &nextPoll); err != nil {
+		return Agent{}, nil, err
+	}
+	if triggers != "" {
+		if err := json.Unmarshal([]byte(triggers), &a.Triggers); err != nil {
+			return Agent{}, nil, fmt.Errorf("agent scan: decode triggers: %w", err)
+		}
+	}
+	a.Enabled = enabled != 0
+	a.CreatedAt, _ = time.Parse(timeFmt, created)
+	a.UpdatedAt, _ = time.Parse(timeFmt, updated)
+	return a, parseNullTime(nextPoll), nil
+}
+
 // scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
 	Scan(dest ...any) error
