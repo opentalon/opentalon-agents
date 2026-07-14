@@ -77,5 +77,13 @@ func actions() []pkg.ActionMsg {
 			InjectContextArgs: injected,
 			Parameters:        []pkg.ParameterMsg{idParam},
 		},
+		{
+			// Hidden from the LLM (UserOnly). Fired by the host scheduler
+			// (a `scheduler.jobs` entry with `action: agents.tick`) to run
+			// one system-wide watcher sweep. Unscoped: no group_id.
+			Name:        "tick",
+			Description: "Internal: run one poll/watch sweep across all agents. Fired by the host scheduler, not by users.",
+			UserOnly:    true,
+		},
 	}
 }

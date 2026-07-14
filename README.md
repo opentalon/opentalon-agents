@@ -74,7 +74,7 @@ scheduler:
 
 **2. LLM-initiated** _(shipped)_ — the advertised actions become tools (`agents.create`, `agents.run`, …). When the user asks for an automation, the LLM calls `agents.create`; because we declare `supports_callbacks`, the host dispatches over **ExecuteBidi**, so our handler gets a **live `HostCaller`** to reach `talon-plugin`.
 
-**3. Autonomous tick** _(planned — Phase 2)_ — the LLM is *not* involved. The `scheduler.jobs` entry fires `agents.tick` on a timer; the scheduler calls it through the orchestrator, again over bidi with a live `HostCaller`. The tick is **unscoped** (no user/group), so it sweeps all agents system-wide.
+**3. Autonomous tick** _(engine implemented; requires the `scheduler.jobs` entry above)_ — the LLM is *not* involved. The `scheduler.jobs` entry fires `agents.tick` on a timer; the scheduler calls it through the orchestrator, again over bidi with a live `HostCaller`. The tick is **unscoped** (no user/group), so it sweeps all agents system-wide.
 
 ---
 
@@ -178,7 +178,7 @@ Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` does
 | `run` | Execute an agent's program now (inline) and return the result. _shipped_ |
 | `update` | Replace the Talon source / triggers (re-validated). |
 | `enable` / `disable` / `delete` | Lifecycle. |
-| `tick` | Hidden (`UserOnly`) — fired by the host scheduler to drive watchers. _planned (Phase 2)_ |
+| `tick` | Hidden (`UserOnly`) — fired by the host scheduler to drive watchers (poll → map → evaluate). _implemented_ |
 
 `group_id` / `entity_id` are injected by the host per call; every operation is group-scoped. All actions run on the bidi path (a live `HostCaller` is needed to reach `talon-plugin`).
 
