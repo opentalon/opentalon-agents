@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/opentalon/opentalon/pkg/plugin"
 )
@@ -42,4 +43,48 @@ func (p talonProxy) Check(ctx context.Context, host plugin.HostCaller, src strin
 // talon-plugin's own callback stream.
 func (p talonProxy) Run(ctx context.Context, host plugin.HostCaller, src string) (plugin.CallResult, error) {
 	return host.RunAction(ctx, p.pluginName, "execute_workflow", map[string]string{"workflow": src})
+}
+
+// Firing describes one on-block that fired during an Evaluate call.
+type Firing struct {
+	OnBlock string `json:"on_block"`
+	Ref     string `json:"ref,omitempty"`
+	RefKind string `json:"ref_kind,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// EvalResult is the parsed result of talon-plugin.evaluate: which
+// on-blocks fired and the updated fact snapshot to persist.
+type EvalResult struct {
+	Firings  []Firing        `json:"firings"`
+	Snapshot json.RawMessage `json:"snapshot"`
+}
+
+// Evaluate reactively evaluates Talon source against facts via
+// talon-plugin.evaluate. talon-plugin hydrates a session from the prior
+// snapshot, asserts the facts (firing on-blocks, whose workflows run
+// their MCP steps back through the host), and returns which blocks fired
+// plus the new snapshot. `facts` is a JSON array of
+// {record_id,attribute,value}; `snapshot` is the prior snapshot JSON and
+// may be empty on the first evaluation.
+func (p talonProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source string, facts, snapshot json.RawMessage) (EvalResult, error) {
+	args := map[string]string{"source": source, "facts": "[]"}
+	if len(facts) > 0 {
+		args["facts"] = string(facts)
+	}
+	if len(snapshot) > 0 {
+		args["snapshot"] = string(snapshot)
+	}
+	res, err := host.RunAction(ctx, p.pluginName, "evaluate", args)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	if res.StructuredContent == "" {
+		return EvalResult{}, fmt.Errorf("talon-plugin evaluate: empty result")
+	}
+	var out EvalResult
+	if err := json.Unmarshal([]byte(res.StructuredContent), &out); err != nil {
+		return EvalResult{}, fmt.Errorf("talon-plugin evaluate: decode result: %w", err)
+	}
+	return out, nil
 }
