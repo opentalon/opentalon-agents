@@ -25,17 +25,19 @@ var promptText string
 // (validate, run) is a callback to talon-plugin through the host, which
 // requires a live HostCaller — available only on the bidi path.
 type Handler struct {
-	cfg   *config.Config
-	mgr   *agent.Manager
-	talon talonProxy
+	cfg    *config.Config
+	mgr    *agent.Manager
+	talon  talonProxy
+	engine *Engine
 }
 
 // NewHandler wires the handler.
 func NewHandler(cfg *config.Config, mgr *agent.Manager) *Handler {
 	return &Handler{
-		cfg:   cfg,
-		mgr:   mgr,
-		talon: talonProxy{pluginName: cfg.TalonPluginName},
+		cfg:    cfg,
+		mgr:    mgr,
+		talon:  talonProxy{pluginName: cfg.TalonPluginName},
+		engine: NewEngine(cfg, mgr),
 	}
 }
 
@@ -68,6 +70,12 @@ func (h *Handler) Configure(string) error {
 // ExecuteWithCallbacks is the bidi path: it dispatches every action and
 // carries the live HostCaller used to reach talon-plugin.
 func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
+	// tick is the hidden, system-wide scheduler action — unscoped (no
+	// group_id), so it's handled before the group gate below.
+	if req.Action == "tick" {
+		return h.actionTick(ctx, req, host)
+	}
+
 	rc := agent.RunContext{GroupID: req.Args["group_id"], EntityID: req.Args["entity_id"]}
 	if rc.GroupID == "" {
 		return errResp(req.ID, "missing group_id (should be injected by the host)")
@@ -93,6 +101,20 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 	default:
 		return errResp(req.ID, "unknown action: "+req.Action)
 	}
+}
+
+// actionTick runs one system-wide watcher sweep. It is fired by the host
+// scheduler (a `scheduler.jobs` entry with `action: agents.tick`), not by
+// the LLM, and needs the live HostCaller to poll sources and reach
+// talon-plugin.
+func (h *Handler) actionTick(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
+	res, err := h.engine.Tick(ctx, host)
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
+	return jsonResp(req.ID,
+		fmt.Sprintf("tick: %d agent(s), %d firing(s), %d error(s)", res.Agents, res.Firings, res.Errors),
+		res)
 }
 
 func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.HostCaller, rc agent.RunContext) pkg.Response {
