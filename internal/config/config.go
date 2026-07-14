@@ -28,6 +28,9 @@ type Config struct {
 	PollFloorSeconds int `json:"poll_floor_seconds"`
 	MaxItemsPerPoll  int `json:"max_items_per_poll"`
 
+	// MaxBackoffSeconds caps the poll-failure backoff. Default 1800 (30m).
+	MaxBackoffSeconds int `json:"max_backoff_seconds"`
+
 	// WebhookSecret is the shared bearer token gating the webhook HTTP
 	// endpoint (Authorization: Bearer <secret>). Empty disables the
 	// endpoint entirely — we refuse to serve an unauthenticated ingress.
@@ -63,6 +66,9 @@ func Parse(jsonStr string) (*Config, error) {
 	}
 	if cfg.MaxItemsPerPoll == 0 {
 		cfg.MaxItemsPerPoll = 500
+	}
+	if cfg.MaxBackoffSeconds == 0 {
+		cfg.MaxBackoffSeconds = 1800
 	}
 	return cfg, nil
 }

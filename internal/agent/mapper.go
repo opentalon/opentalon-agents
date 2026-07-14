@@ -24,8 +24,46 @@ type Fact struct {
 //
 // v1 handles a single watched entity per poll — the stock-watcher shape.
 // Multi-entity list responses (+ max-items) are a later phase.
-func Map(pc PollConfig, response any, registry map[string]int) ([]Fact, map[string]int, error) {
-	return MapValue(pc.ValuePath, pc.IDField, pc.Attribute, response, registry)
+// Map extracts facts from a decoded poll response. With no ItemsPath it
+// maps a single entity (value_path/id_field relative to the whole
+// response). With ItemsPath set it maps EACH element of that list (a
+// multi-entity watch), value_path/id_field relative to each item, capped
+// at maxItems (0 = uncapped). It returns the facts, the grown registry,
+// and the number of items dropped by the cap (so the caller can surface a
+// non-silent truncation).
+func Map(pc PollConfig, response any, registry map[string]int, maxItems int) ([]Fact, map[string]int, int, error) {
+	if registry == nil {
+		registry = map[string]int{}
+	}
+	if pc.ItemsPath == "" {
+		facts, reg, err := MapValue(pc.ValuePath, pc.IDField, pc.Attribute, response, registry)
+		return facts, reg, 0, err
+	}
+
+	node, ok := dotPath(response, pc.ItemsPath)
+	if !ok {
+		return nil, registry, 0, fmt.Errorf("mapper: items_path %q not found in response", pc.ItemsPath)
+	}
+	list, ok := node.([]any)
+	if !ok {
+		return nil, registry, 0, fmt.Errorf("mapper: items_path %q is not a list", pc.ItemsPath)
+	}
+
+	truncated := 0
+	if maxItems > 0 && len(list) > maxItems {
+		truncated = len(list) - maxItems
+		list = list[:maxItems]
+	}
+	facts := make([]Fact, 0, len(list))
+	for _, item := range list {
+		f, reg, err := MapValue(pc.ValuePath, pc.IDField, pc.Attribute, item, registry)
+		if err != nil {
+			return nil, registry, 0, err
+		}
+		registry = reg
+		facts = append(facts, f...)
+	}
+	return facts, registry, truncated, nil
 }
 
 // MapValue extracts one fact from a decoded response given a mapping spec

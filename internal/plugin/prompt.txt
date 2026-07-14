@@ -47,6 +47,7 @@ poll config fields:
 - value_path — dot-path to the watched value in the tool's response.
 - id_field — dot-path to the entity's id (so multiple items stay distinct). Omit for a single watched thing.
 - attribute — the fact attribute name. **It MUST match the `attr` in your `on change attr "..."` block** (here, "current_stock").
+- items_path — OPTIONAL. To watch MANY entities from one poll, set this to the dot-path of the list in the response; value_path/id_field are then read from EACH item. The same on-block fires per item that crosses.
 
 PUSH INSTEAD OF POLL (webhook)
 Instead of polling, an external system can PUSH data. Use a `webhook` trigger — same `on`-block source, but the trigger carries just the mapping (no server/tool/interval):

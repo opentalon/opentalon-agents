@@ -13,8 +13,6 @@ import (
 	"github.com/opentalon/opentalon-agents/internal/config"
 )
 
-const maxBackoff = 30 * time.Minute
-
 // Engine drives the autonomous watchers. On each tick it sweeps the agents
 // whose poll trigger is due and, for each, polls the source, maps the
 // result to facts, evaluates the agent's Talon reactively (via
@@ -222,9 +220,12 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
 	}
-	facts, registry, err := agent.Map(*pc, resp, state.EntityMap)
+	facts, registry, truncated, err := agent.Map(*pc, resp, state.EntityMap, e.cfg.MaxItemsPerPoll)
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
+	}
+	if truncated > 0 {
+		slog.Warn("opentalon-agents: poll result truncated", "agent", a.ID, "dropped", truncated, "max_items", e.cfg.MaxItemsPerPoll)
 	}
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
@@ -255,7 +256,8 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 // out, preserves the snapshot, and records a failed run.
 func (e *Engine) failAgent(ctx context.Context, a agent.Agent, state agent.AgentState, interval time.Duration, now time.Time, cause error) error {
 	state.ConsecutiveFailures++
-	next := now.Add(backoff(interval, state.ConsecutiveFailures))
+	cap := time.Duration(e.cfg.MaxBackoffSeconds) * time.Second
+	next := now.Add(backoff(interval, state.ConsecutiveFailures, cap))
 	state.NextPollAt = &next
 	if err := e.mgr.SaveState(ctx, state); err != nil {
 		slog.Warn("opentalon-agents: save state after failure", "agent", a.ID, "error", err)
@@ -294,17 +296,17 @@ func (e *Engine) pollInterval(pc *agent.PollConfig) time.Duration {
 	return d
 }
 
-// backoff is interval * 2^(failures-1), capped at maxBackoff.
-func backoff(interval time.Duration, failures int) time.Duration {
+// backoff is interval * 2^(failures-1), capped at cap.
+func backoff(interval time.Duration, failures int, cap time.Duration) time.Duration {
 	d := interval
 	for i := 1; i < failures; i++ {
 		d *= 2
-		if d >= maxBackoff {
-			return maxBackoff
+		if d >= cap {
+			return cap
 		}
 	}
-	if d > maxBackoff {
-		return maxBackoff
+	if d > cap {
+		return cap
 	}
 	return d
 }
