@@ -282,7 +282,7 @@ func (m *Manager) ListEnabledPollDue(ctx context.Context, now time.Time) ([]Agen
 
 	var out []Agent
 	for rows.Next() {
-		a, nextPoll, err := scanAgentWithNextPoll(rows)
+		a, nextPoll, err := scanAgentJoinedTime(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -297,9 +297,39 @@ func (m *Manager) ListEnabledPollDue(ctx context.Context, now time.Time) ([]Agen
 	return out, rows.Err()
 }
 
-// scanAgentWithNextPoll scans the agent columns plus the joined
-// agent_state.next_poll_at (nullable).
-func scanAgentWithNextPoll(s scanner) (Agent, *time.Time, error) {
+// ListEnabledScheduleDue returns enabled agents with a schedule (cron)
+// trigger that is due (no state yet, or next_cron_at <= now), across all
+// groups. Like the poll sweep, but keyed on next_cron_at.
+func (m *Manager) ListEnabledScheduleDue(ctx context.Context, now time.Time) ([]Agent, error) {
+	q := m.db.Dialect.Rebind(`SELECT a.id, a.name, a.description, a.group_id, a.entity_id, a.talon_source,
+		a.triggers_json, a.enabled, a.created_at, a.updated_at, s.next_cron_at
+		FROM agents a LEFT JOIN agent_state s ON s.agent_id = a.id
+		WHERE a.enabled = 1`)
+	rows, err := m.db.SQL().QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("agent list schedule-due: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Agent
+	for rows.Next() {
+		a, nextCron, err := scanAgentJoinedTime(rows)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := a.ScheduleTrigger(); !ok {
+			continue
+		}
+		if nextCron == nil || !nextCron.After(now) {
+			out = append(out, a)
+		}
+	}
+	return out, rows.Err()
+}
+
+// scanAgentJoinedTime scans the agent columns plus one joined, nullable
+// agent_state timestamp (next_poll_at or next_cron_at, per the query).
+func scanAgentJoinedTime(s scanner) (Agent, *time.Time, error) {
 	var (
 		a        Agent
 		triggers string
