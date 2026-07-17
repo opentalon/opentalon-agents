@@ -1,0 +1,57 @@
+# Host-config additions for the opentalon-agents test harness.
+#
+# These blocks go into the opentalon HOST config (../opentalon/config.yaml).
+# Merge them into your existing config (keep your `models:` / `routing:`
+# blocks with their API keys — don't duplicate secrets here).
+#
+# What this wires up:
+#   - console channel  -> interactive terminal chat (disable telegram/slack)
+#   - agents plugin     -> your locally built binary (sqlite store; the DB
+#                          behind the watcher is Postgres, reached via MCP)
+#   - talon-plugin      -> check / evaluate / execute_workflow
+#   - mcp-plugin        -> bridges the testharness MCP server (get_item, ...)
+#   - scheduler.tick    -> fires agents.tick every 1m to drive watchers
+
+# ── Channel: console only ───────────────────────────────────────────────────
+# Replace your `channels:` block with this for local terminal use. (Leaving
+# telegram/slack enabled would demand their tokens and fight for the terminal.)
+channels:
+  console:
+    enabled: true
+    github: "opentalon/console-channel"
+    ref: "master"
+    config: {}
+
+# ── Plugins ─────────────────────────────────────────────────────────────────
+plugins:
+  agents:
+    enabled: true
+    # Path is relative to the host's working dir (../opentalon).
+    plugin: "../opentalon-agents/bin/opentalon-agents"
+    # expose_http + webhook_secret only needed if you test webhook triggers.
+    # expose_http: true
+    config:
+      db: { driver: sqlite, dsn: ./agents.db }
+      talon_plugin_name: talon-plugin
+      # webhook_secret: "dev-secret"
+
+  talon-plugin:
+    enabled: true
+    github: opentalon/talon-plugin
+    ref: v0.2.0            # provides check + evaluate + execute_workflow
+
+  mcp-plugin:
+    enabled: true
+    github: opentalon/mcp-plugin
+    ref: master
+    config:
+      servers:
+        - server: testdb
+          url: http://localhost:8765/sse
+
+# ── Scheduler: drive the watcher ────────────────────────────────────────────
+scheduler:
+  jobs:
+    - name: agents-tick
+      interval: "1m"
+      action: agents.tick

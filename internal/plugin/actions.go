@@ -28,6 +28,7 @@ func actions() []pkg.ActionMsg {
 			Name:              "create",
 			Description:       "Create a persistent agent from a Talon program. The source is validated before storing.",
 			InjectContextArgs: injected,
+			AlwaysInclude:     true,
 			Parameters: []pkg.ParameterMsg{
 				{Name: "name", Description: "Short unique name for the agent (within your group).", Type: "string", Required: true},
 				{Name: "description", Description: "The user's request in their own words — what they asked this agent to do. Store the original ask verbatim (lightly cleaned up), not your paraphrase of the Talon.", Type: "string", Required: true},
@@ -39,18 +40,21 @@ func actions() []pkg.ActionMsg {
 			Description:       "List all agents in your group.",
 			InjectContextArgs: injected,
 			ReadOnly:          true,
+			AlwaysInclude:     true,
 		},
 		{
 			Name:              "show",
 			Description:       "Show one agent, including its Talon source and triggers.",
 			InjectContextArgs: injected,
 			ReadOnly:          true,
+			AlwaysInclude:     true,
 			Parameters:        []pkg.ParameterMsg{idParam},
 		},
 		{
 			Name:              "run",
 			Description:       "Run an agent's program now (inline), returning the result. Records a run.",
 			InjectContextArgs: injected,
+			AlwaysInclude:     true,
 			Parameters:        []pkg.ParameterMsg{idParam},
 		},
 		{

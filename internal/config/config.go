@@ -35,6 +35,15 @@ type Config struct {
 	// endpoint (Authorization: Bearer <secret>). Empty disables the
 	// endpoint entirely — we refuse to serve an unauthenticated ingress.
 	WebhookSecret string `json:"webhook_secret"`
+
+	// DefaultGroupID is a local-development fallback for the group scope
+	// when the host injects no group_id. Prod dispatches (operator /
+	// control-plane) always stamp a real group_id in the call args, so
+	// this fallback never fires there. The interactive chat LLM path on
+	// the current host injects no group_id, so set this (e.g. "default")
+	// to author agents from a local console/telegram/slack chat. Unset =
+	// fail-closed: a call with no group_id is rejected, exactly as before.
+	DefaultGroupID string `json:"default_group_id"`
 }
 
 // DBConfig selects the storage backend.
