@@ -88,7 +88,9 @@ jobs:
           echo "mcp did not start"; cat "$GITHUB_WORKSPACE/mcp.log"; exit 1
 
       - name: Seed watcher agent
-        run: AGENTS_DB=work/agents.db AGENT_INTERVAL=10s go run ./testharness/seed-agent
+        run: |
+          mkdir -p work
+          AGENTS_DB=work/agents.db AGENT_INTERVAL=10s go run ./testharness/seed-agent
 
       - name: Assemble /work
         run: |
