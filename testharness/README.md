@@ -96,6 +96,26 @@ Edge semantics to verify: `8 → 7` does **not** re-fire; only a fresh `≥10 �
 crossing opens another ticket. Restart the host mid-run — the snapshot reloads
 from `agents.db`, so replaying `8` fires nothing.
 
+## In CI
+
+`.github/workflows/e2e.yml` runs this stack headless against the **published
+host container** (`ghcr.io/opentalon/opentalon`), so nothing here needs building
+the host. Two jobs:
+
+- **deterministic** (PR gate) — seeds the watcher directly with
+  `go run ./testharness/seed-agent` (the exact agent the LLM authors, no model),
+  then drives tick → drop stock → assert one ticket. Reliable.
+- **real-llm** (nightly + manual) — pipes the authoring prompt to the console
+  and lets a real model author the agent. Flaky by nature; not a gate.
+
+Both stand up Postgres, **datalevin-server** (from the `opentalon/talon-language`
+repo — talon-plugin's backend at `:8898`) and the MCP server, mount the plugin
+binary + rendered `ci/config.yaml` into the container, and run
+`ci/run-e2e.sh`. Needs the `ANTHROPIC_API_KEY` repo secret.
+
+`ci/config.yaml` uses a 10s tick + 10s poll interval so the crossing is observed
+in a couple of minutes; `seed-agent` takes `AGENT_INTERVAL` to match.
+
 ## Smoke-test the MCP server alone
 
 Without the host, confirm tools work:

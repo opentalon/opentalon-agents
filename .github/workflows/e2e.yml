@@ -1,0 +1,189 @@
+name: E2E
+
+# Full-stack end-to-end: builds the agents plugin, stands up Postgres +
+# datalevin + the testharness MCP server, runs the published opentalon host
+# container, and asserts the stock watcher fires exactly one refill ticket.
+#
+# Two jobs:
+#   deterministic  (PR gate)      pre-seeds the agent, no LLM — reliable.
+#   real-llm       (nightly/manual) drives the console with a real model to
+#                                   author the agent, then the same assertion.
+#
+# Requires repo secret ANTHROPIC_API_KEY. talon-language (datalevin-server) and
+# the opentalon/{console-channel,talon-plugin,mcp-plugin} repos must be
+# clone-able (public, or wire up a token).
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+env:
+  DATABASE_URL: "postgres://postgres:postgres@localhost:5432/opentalon_test?sslmode=disable"
+  HOST_IMAGE: "ghcr.io/opentalon/opentalon:latest"
+
+jobs:
+  deterministic:
+    name: E2E (deterministic, pre-seeded agent)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: opentalon_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: opentalon/talon-language
+          path: talon-language
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Clojure CLI
+        run: |
+          curl -sL https://download.clojure.org/install/linux-install-1.12.5.1638.sh -o install-clojure.sh
+          sudo bash install-clojure.sh
+          clojure --version
+
+      - name: Seed Postgres
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f testharness/seed.sql
+
+      - name: Start datalevin-server
+        run: |
+          cd talon-language/datalevin-server
+          nohup clojure -M:run > "$GITHUB_WORKSPACE/datalevin.log" 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 2
+            curl -sf http://localhost:8898/health | grep -q ok && { echo "datalevin up"; exit 0; }
+          done
+          echo "datalevin did not start"; cat "$GITHUB_WORKSPACE/datalevin.log"; exit 1
+
+      - name: Build agents plugin (dev group fallback)
+        run: make build BUILD_FLAGS="-tags dev"
+
+      - name: Start testharness MCP server
+        run: |
+          cd testharness/mcp
+          nohup env DATABASE_URL="$DATABASE_URL" ADDR=:8765 go run . > "$GITHUB_WORKSPACE/mcp.log" 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 2
+            (echo > /dev/tcp/localhost/8765) 2>/dev/null && { echo "mcp up"; exit 0; }
+          done
+          echo "mcp did not start"; cat "$GITHUB_WORKSPACE/mcp.log"; exit 1
+
+      - name: Seed watcher agent
+        run: AGENTS_DB=work/agents.db AGENT_INTERVAL=10s go run ./testharness/seed-agent
+
+      - name: Assemble /work
+        run: |
+          mkdir -p work/bin
+          cp bin/opentalon-agents work/bin/
+          ANTHROPIC_API_KEY='${{ secrets.ANTHROPIC_API_KEY }}' envsubst < testharness/ci/config.yaml > work/config.yaml
+          chmod -R 0777 work   # host container runs as a non-root user; let it write agents.db
+
+      - name: Run E2E
+        env:
+          MODE: deterministic
+          WORK: ${{ github.workspace }}/work
+          MCP_LOG: ${{ github.workspace }}/mcp.log
+          DATALEVIN_LOG: ${{ github.workspace }}/datalevin.log
+        run: bash testharness/ci/run-e2e.sh
+
+  real-llm:
+    name: E2E (real LLM authoring)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: opentalon_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: opentalon/talon-language
+          path: talon-language
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Clojure CLI
+        run: |
+          curl -sL https://download.clojure.org/install/linux-install-1.12.5.1638.sh -o install-clojure.sh
+          sudo bash install-clojure.sh
+          clojure --version
+
+      - name: Seed Postgres
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f testharness/seed.sql
+
+      - name: Start datalevin-server
+        run: |
+          cd talon-language/datalevin-server
+          nohup clojure -M:run > "$GITHUB_WORKSPACE/datalevin.log" 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 2
+            curl -sf http://localhost:8898/health | grep -q ok && { echo "datalevin up"; exit 0; }
+          done
+          echo "datalevin did not start"; cat "$GITHUB_WORKSPACE/datalevin.log"; exit 1
+
+      - name: Build agents plugin (dev group fallback)
+        run: make build BUILD_FLAGS="-tags dev"
+
+      - name: Start testharness MCP server
+        run: |
+          cd testharness/mcp
+          nohup env DATABASE_URL="$DATABASE_URL" ADDR=:8765 go run . > "$GITHUB_WORKSPACE/mcp.log" 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 2
+            (echo > /dev/tcp/localhost/8765) 2>/dev/null && { echo "mcp up"; exit 0; }
+          done
+          echo "mcp did not start"; cat "$GITHUB_WORKSPACE/mcp.log"; exit 1
+
+      - name: Assemble /work (no pre-seeded agent)
+        run: |
+          mkdir -p work/bin
+          cp bin/opentalon-agents work/bin/
+          ANTHROPIC_API_KEY='${{ secrets.ANTHROPIC_API_KEY }}' envsubst < testharness/ci/config.yaml > work/config.yaml
+          chmod -R 0777 work
+
+      - name: Run E2E
+        env:
+          MODE: real-llm
+          WORK: ${{ github.workspace }}/work
+          MCP_LOG: ${{ github.workspace }}/mcp.log
+          DATALEVIN_LOG: ${{ github.workspace }}/datalevin.log
+          PROMPT: >-
+            Create an agent named stock-abc that watches inventory item barcode
+            ABC-123 and opens a refill ticket for 50 units when its stock drops
+            below 10. Poll the mcp server tool testdb__get_item with arg
+            barcode=ABC-123 every 10 seconds; the stock value is at current_stock.
+        run: bash testharness/ci/run-e2e.sh

@@ -108,6 +108,7 @@ func getItem(pool *pgxpool.Pool) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("get_item %s: %v", barcode, err)), nil
 		}
+		log.Printf("testharness-mcp: get_item %s -> stock %d", barcode, stock)
 		return jsonResult(map[string]any{
 			"barcode":       barcode,
 			"name":          name,
