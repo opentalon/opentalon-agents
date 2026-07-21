@@ -19,8 +19,6 @@
 #   BARCODE        watched barcode (default ABC-123)
 #   PROMPT         real-llm only: the authoring prompt piped to console stdin
 set -euo pipefail
-PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
-set -x
 
 BARCODE="${BARCODE:-ABC-123}"
 CONTAINER=opentalon-host
@@ -89,6 +87,11 @@ wait_for_log() {
     fi
     [ $((waited % 30)) -eq 0 ] && echo "  ...still waiting (${waited}s) for: $pat"
   done
+  # The `until` loop's status is that of the last body command; the progress
+  # `[ … -eq 0 ]` test above returns 1 on most iterations, which would poison
+  # the loop's exit status and trip set -e at the call site. Return success
+  # explicitly — the timeout/not-running paths return 1 before reaching here.
+  return 0
 }
 
 echo "== starting host ($MODE) =="

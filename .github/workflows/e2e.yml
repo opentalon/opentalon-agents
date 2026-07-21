@@ -22,11 +22,6 @@ on:
 env:
   DATABASE_URL: "postgres://postgres:postgres@localhost:5432/opentalon_test?sslmode=disable"
   HOST_IMAGE: "opentalon-host:ci"
-  # The watcher's evaluate result needs structured-content propagation through
-  # the callback path (opentalon PR #312), not yet in the published :latest
-  # image. Build the host from that branch until it merges; then this can revert
-  # to `ghcr.io/opentalon/opentalon:latest` and the build step below can go.
-  HOST_BRANCH: "fix/callback-structured-content-and-scope-providers"
 
 jobs:
   deterministic:
@@ -104,13 +99,11 @@ jobs:
           ANTHROPIC_API_KEY='${{ secrets.ANTHROPIC_API_KEY }}' envsubst < testharness/ci/config.yaml > work/config.yaml
           chmod -R 0777 work   # host container runs as a non-root user; let it write agents.db
 
-      - name: Build host image (opentalon PR #312; drop once merged)
+      - name: Build host image (overlay make for console-channel)
         run: |
-          docker build --build-arg BRANCH="$HOST_BRANCH" -t opentalon-host:base \
-            "https://github.com/opentalon/opentalon.git#${HOST_BRANCH}"
           # The runtime image (golang:alpine) has git+go but no make, which the
           # console channel needs to build itself on first run. Overlay it in.
-          printf 'FROM opentalon-host:base\nUSER root\nRUN apk add --no-cache make\nUSER opentalon\n' > Dockerfile.hostci
+          printf 'FROM ghcr.io/opentalon/opentalon:latest\nUSER root\nRUN apk add --no-cache make\nUSER opentalon\n' > Dockerfile.hostci
           docker build -f Dockerfile.hostci -t "$HOST_IMAGE" .
 
       - name: Run E2E
@@ -191,13 +184,11 @@ jobs:
           ANTHROPIC_API_KEY='${{ secrets.ANTHROPIC_API_KEY }}' envsubst < testharness/ci/config.yaml > work/config.yaml
           chmod -R 0777 work
 
-      - name: Build host image (opentalon PR #312; drop once merged)
+      - name: Build host image (overlay make for console-channel)
         run: |
-          docker build --build-arg BRANCH="$HOST_BRANCH" -t opentalon-host:base \
-            "https://github.com/opentalon/opentalon.git#${HOST_BRANCH}"
           # The runtime image (golang:alpine) has git+go but no make, which the
           # console channel needs to build itself on first run. Overlay it in.
-          printf 'FROM opentalon-host:base\nUSER root\nRUN apk add --no-cache make\nUSER opentalon\n' > Dockerfile.hostci
+          printf 'FROM ghcr.io/opentalon/opentalon:latest\nUSER root\nRUN apk add --no-cache make\nUSER opentalon\n' > Dockerfile.hostci
           docker build -f Dockerfile.hostci -t "$HOST_IMAGE" .
 
       - name: Run E2E
