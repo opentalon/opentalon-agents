@@ -1,0 +1,230 @@
+{
+  "recorded_at": "2026-07-21T15:18:53.429628762Z",
+  "interactions": [
+    {
+      "request_sha256": "3dcee5064feb569001adc6d9bb46136be7746e09218f155dad056d7f1432c20c",
+      "status": 200,
+      "response": {
+        "model": "claude-haiku-4-5-20251001",
+        "id": "msg_011CdFRhGH9rT17vDqiVZirt",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "```json\n{\n  \"type\": \"pipeline\",\n  \"steps\": [\n    {\n      \"id\": \"create_agent\",\n      \"name\": \"Create stock-abc agent with polling trigger\",\n      \"plugin\": \"agents\",\n      \"action\": \"create\",\n      \"args\": {\n        \"name\": \"stock-abc\",\n        \"description\": \"Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10\",\n        \"talon_source\": \"workflow \\\"check_stock\\\" {\\n  step \\\"get_item\\\" {\\n    mcp \\\"testdb\\\" action=\\\"testdb__get_item\\\" barcode=\\\"ABC-123\\\"\\n  }\\n  step \\\"create_ticket\\\" {\\n    when current_stock \u003c 10\\n    mcp \\\"testdb\\\" action=\\\"testdb__create_ticket\\\" barcode=\\\"ABC-123\\\" qty=50\\n  }\\n}\\n\\non fact current_stock \u003c 10 {\\n  workflow \\\"check_stock\\\" {}\\n}\",\n        \"triggers\": [\n          {\n            \"type\": \"schedule\",\n            \"interval\": \"10s\"\n          }\n        ]\n      },\n      \"depends_on\": []\n    }\n  ]\n}\n```"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2656,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 301,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        }
+      }
+    },
+    {
+      "request_sha256": "0e03d6c6d18e19ae5bf24b047953bb5ae8c34bca22c7fa663ee3afcdeccb54be",
+      "status": 200,
+      "response": {
+        "model": "claude-haiku-4-5-20251001",
+        "id": "msg_011CdFRhTsR3Ay7r9QHMoUat",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll create an agent that monitors the stock level for item ABC-123 and automatically opens a refill ticket when it drops below 10 units."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01PtPdeu2HSJWo4fCPKUzVTk",
+            "name": "agents__create",
+            "input": {
+              "name": "stock-abc",
+              "description": "Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10",
+              "talon_source": "on change attr \"current_stock\" {\n  when prev_value \u003e= 10 and new_value \u003c 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
+              "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 5625,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 322,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        }
+      }
+    },
+    {
+      "request_sha256": "d6347e95163adaa463202031253be09f81cced942ae5d121c562968f21cc5063",
+      "status": 200,
+      "response": {
+        "model": "claude-haiku-4-5-20251001",
+        "id": "msg_011CdFRhkNMEVybuqqJigZ2t",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Let me load the agent tool first:"
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_016boTjEKNMYdycCR1PCF1rW",
+            "name": "_meta__load_tools",
+            "input": {
+              "names": "agents__create"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 6048,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 67,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        }
+      }
+    },
+    {
+      "request_sha256": "2c59483ffc52d838d24c4cca793f227cbe8edf3c13a7aa4fa539d361f6678309",
+      "status": 200,
+      "response": {
+        "model": "claude-haiku-4-5-20251001",
+        "id": "msg_011CdFRhrsGvq1a6NFxjpbEt",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Now I'll create the agent:"
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01XUHog7gqb6KaN1vGPgUKhQ",
+            "name": "agents__create",
+            "input": {
+              "description": "Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10",
+              "name": "stock-abc",
+              "talon_source": "on change attr \"current_stock\" {\n  when prev_value \u003e= 10 and new_value \u003c 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
+              "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]"
+            },
+            "caller": {
+              "type": "direct"
+            }
+          }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 6413,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 297,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        }
+      }
+    },
+    {
+      "request_sha256": "195be377e254805e34f98caf0dc8ba7060448953bb7042feea9a9c9924330463",
+      "status": 200,
+      "response": {
+        "model": "claude-haiku-4-5-20251001",
+        "id": "msg_011CdFRi3MYzhRLgbW4zXnzh",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Perfect! I've created the agent **stock-abc**. It will:\n\n- **Poll** the testdb server every 10 seconds to fetch the current stock level for item ABC-123\n- **Monitor** the `current_stock` attribute and watch for when it crosses from ≥10 to \u003c10\n- **Fire once** on that transition and create a refill ticket for 50 units\n\nThe agent is enabled and ready to run. When stock drops below 10, it will automatically open a refill ticket."
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 6862,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 117,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        }
+      }
+    },
+    {
+      "request_sha256": "f1efa5c8bf9fae36e4da7c68d1d12a0bf9ede544cebd6e017c068a25bb1821b0",
+      "status": 200,
+      "response": {
+        "model": "claude-haiku-4-5-20251001",
+        "id": "msg_011CdFRiDp75CMVeqZtqbUdH",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Create inventory monitoring agent for ABC-123"
+          }
+        ],
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 256,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 11,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        }
+      }
+    }
+  ]
+}

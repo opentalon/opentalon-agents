@@ -18,6 +18,8 @@ func TestPromptCoversWatcherAuthoring(t *testing.T) {
 		"prev_value >= 10",        // fire-once crossing idiom
 		"MUST match",              // attribute<->on-block linkage rule
 		"6-field cron is invalid", // steer away from seconds-cron toward poll interval
+		"does the FETCHING",       // poll fetches; don't fetch inside talon_source
+		"never a `pipeline`",      // steer away from free-form pipeline output
 	}
 	for _, s := range must {
 		if !strings.Contains(promptText, s) {

@@ -109,14 +109,34 @@ the host. Three jobs:
 - **deterministic** (PR gate) — seeds the watcher directly with
   `go run ./testharness/seed-agent` (the exact agent the LLM authors, no model),
   then drives tick → drop stock → assert one ticket. Reliable.
-- **vcr-replay** (PR gate) — pipes the authoring prompt to the console; the host
-  calls Anthropic, but its `base_url` points at the **vcr-proxy** replaying
-  `ci/cassette.json`. Real authoring path (chat → LLM → Talon agent),
-  deterministic, **no secret**. Same tick → drop → assert.
+- **vcr-replay** (PR, label-gated) — pipes the authoring prompt to the console;
+  the host calls Anthropic, but its `base_url` points at the **vcr-proxy**
+  replaying `ci/cassette.json`. Real authoring path (chat → LLM → Talon agent),
+  deterministic, **no secret**. Same tick → drop → assert. Opt-in because it's
+  slow (see below).
 - **vcr-record** (nightly + manual) — same authoring, but the proxy runs in
   record mode against real Anthropic and uploads a refreshed cassette artifact.
   Catches prompt/model drift; a human reviews and commits the new cassette.
   Needs the `ANTHROPIC_API_KEY` repo secret.
+
+Beyond the ticket, `run-e2e.sh` asserts the authoring leg directly against
+`agents.db`: the `stock-abc` agent row exists and at least one run reached
+`completed` — so a ticket arriving by any other path can't pass the LLM leg.
+
+### Running vcr-replay on a PR
+
+`vcr-replay` builds the host image and clones/builds the console/talon/mcp
+plugins, so it takes several minutes — too slow for every PR. It's **opt-in via
+the `e2e-vcr` label**:
+
+- **Add the `e2e-vcr` label** to a PR to run it — `gh pr edit <n> --add-label e2e-vcr`
+  (or the GitHub UI). Adding the label re-triggers the workflow immediately, no
+  new push needed; it re-runs on each later push while the label stays on.
+- Remove the label to stop it running on subsequent pushes.
+- **`deterministic` still runs on every PR** (it skips pure label events); only
+  `vcr-replay` is gated.
+- No label needed off-PR: `workflow_dispatch` runs it on demand from the Actions
+  tab, and the nightly schedule runs `vcr-record`.
 
 All three stand up Postgres, **datalevin-server** (from the
 `opentalon/talon-language` repo — talon-plugin's backend at `:8898`) and the MCP
