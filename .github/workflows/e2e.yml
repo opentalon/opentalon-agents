@@ -75,7 +75,7 @@ jobs:
           echo "datalevin did not start"; cat "$GITHUB_WORKSPACE/datalevin.log"; exit 1
 
       - name: Build agents plugin (dev group fallback)
-        run: make build BUILD_FLAGS="-tags dev"
+        run: CGO_ENABLED=0 make build BUILD_FLAGS="-tags dev"
 
       - name: Start testharness MCP server
         run: |
@@ -158,7 +158,7 @@ jobs:
           echo "datalevin did not start"; cat "$GITHUB_WORKSPACE/datalevin.log"; exit 1
 
       - name: Build agents plugin (dev group fallback)
-        run: make build BUILD_FLAGS="-tags dev"
+        run: CGO_ENABLED=0 make build BUILD_FLAGS="-tags dev"
 
       - name: Start testharness MCP server
         run: |
