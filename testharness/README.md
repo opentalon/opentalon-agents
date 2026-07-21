@@ -8,7 +8,7 @@ data), through a tiny custom **MCP server**, in the **opentalon host** with the
 testharness/
   seed.sql          # items + tickets tables, deterministic rows
   mcp/              # custom MCP server (own go module), Postgres-backed
-  host-config.yaml  # blocks to merge into ../opentalon/config.yaml
+  ci/config.yaml    # host config used by CI; a template for local runs
 ```
 
 ## Data flow
@@ -59,11 +59,12 @@ from inside it:
 ```
 cd testharness/mcp && go run .   # listens :8765, SSE at /sse
 ```
-Override the port with `ADDR=:9000` (update host-config.yaml's url to match).
+Override the port with `ADDR=:9000` (update your host config's url to match).
 
-**4. Merge `host-config.yaml`** into `../opentalon/config.yaml** (keep your
-`models:`/`routing:` blocks; swap `channels:` to console; add the `plugins:`
-and `scheduler:` blocks).
+**4. Write the host config.** Use `ci/config.yaml` as a template (it wires the
+console channel + agents/talon/mcp plugins + `agents-tick` scheduler). For a
+local run, swap the `/work/...` paths for your local paths and drop the
+container-only `state:`/`log:` blocks.
 
 **5. Start the host:**
 ```
