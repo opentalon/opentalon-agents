@@ -47,11 +47,20 @@ start_host() {
   FIFO="$(mktemp -u)"; mkfifo "$FIFO"
   # Open read-write first so the container's `< FIFO` doesn't block waiting for a
   # writer, and hold fd 3 open so the console channel's stdin stays connected —
-  # the host exits once it has no live channel. Both modes keep it open; only
-  # real-llm writes the authoring prompt to it.
+  # on EOF the console reads Ctrl+D and the host shuts down. Both modes keep it
+  # open; only real-llm writes the authoring prompt.
+  #
+  # Run backgrounded, NOT `-d`: detached mode drops the container's stdin the
+  # moment the docker CLI returns, which is the EOF we must avoid. Keeping the
+  # CLI alive in the background streams the FIFO into the container for its
+  # whole lifetime.
   exec 3<>"$FIFO"
-  docker run -d -i --name "$CONTAINER" --network host \
-    -v "$WORK":/work -w /work "$HOST_IMAGE" -config /work/config.yaml < "$FIFO"
+  docker run -i --name "$CONTAINER" --network host \
+    -v "$WORK":/work -w /work "$HOST_IMAGE" -config /work/config.yaml < "$FIFO" >/dev/null 2>&1 &
+  for _ in $(seq 1 30); do
+    docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$" && break
+    sleep 1
+  done
   if [ "$MODE" = "real-llm" ]; then
     echo "waiting 30s for host + plugins to build before authoring"
     sleep 30
