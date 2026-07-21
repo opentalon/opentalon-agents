@@ -238,3 +238,7 @@ make vet
 ```
 
 Requires `talon-plugin` (≥ `v0.2.0`, provides `check` + `evaluate`) loaded in the same host. `opentalon-agents` itself imports **no** `talon-language` — all language access is via `host.RunAction("talon-plugin", …)`.
+
+### End-to-end tests
+
+A full-stack E2E (host + plugins + stub MCP) lives in `testharness/` and runs via `.github/workflows/e2e.yml`. The fast **deterministic** job runs on every PR. The **vcr-replay** job — real chat → LLM → Talon authoring, replayed from a committed cassette — is slow, so it's opt-in: add the **`e2e-vcr`** label to a PR to run it (`gh pr edit <n> --add-label e2e-vcr`). A nightly job re-records the cassette against real Anthropic. See `testharness/README.md`.
