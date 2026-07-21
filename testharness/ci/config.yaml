@@ -1,0 +1,98 @@
+# opentalon HOST config for the CI full-stack E2E.
+#
+# Rendered by the e2e workflow with `envsubst`; ${ANTHROPIC_API_KEY} and
+# ${ANTHROPIC_BASE_URL} are substituted. Everything else is fixed so the run is
+# deterministic.
+#
+# Runs inside the published host container with `--network host`, so every
+# `localhost` below is the CI runner's network namespace:
+#   - postgres        service container, :5432 (behind the testharness MCP)
+#   - datalevin-server :8898 (talon-plugin backend)
+#   - testharness MCP  :8765 (bridged by mcp-plugin)
+#   - vcr-proxy        :8788 (Anthropic record/replay; empty base_url in
+#                             deterministic mode, which never calls the LLM)
+# Paths under /work are the runner dir bind-mounted into the container.
+
+models:
+  providers:
+    anthropic:
+      api_key: "${ANTHROPIC_API_KEY}"
+      # Empty -> provider default (real api.anthropic.com). The vcr-replay and
+      # vcr-record jobs point this at the local proxy.
+      base_url: "${ANTHROPIC_BASE_URL}"
+      api: anthropic-messages
+      models:
+        - id: claude-haiku-4-5-20251001
+          name: Claude Haiku 4.5
+          input: [text]
+          context_window: 200000
+          max_tokens: 8192
+          features: [streaming, tools]
+          cost:
+            input: 0.80
+            output: 4.00
+  catalog:
+    anthropic/claude-haiku-4-5-20251001:
+      alias: haiku
+      weight: 100
+
+routing:
+  primary: anthropic/claude-haiku-4-5-20251001
+
+orchestrator:
+  content_preparers: []
+  pipeline:
+    enabled: true
+    max_step_retries: 2
+    step_timeout: "30s"
+
+# Console channel: the deterministic gate never types to it (the agent is
+# pre-seeded); the real-LLM job pipes the authoring prompt to the container's
+# stdin, which this channel reads.
+channels:
+  console:
+    enabled: true
+    github: "opentalon/console-channel"
+    ref: "master"
+    config: {}
+
+plugins:
+  agents:
+    enabled: true
+    plugin: "/work/bin/opentalon-agents"
+    config:
+      db: { driver: sqlite, dsn: /work/agents.db }
+      talon_plugin_name: talon-plugin
+      # Honored only by the `-tags dev` build (console has no profile → no
+      # group_id); CI builds the plugin with that tag.
+      default_group_id: default
+
+  talon-plugin:
+    enabled: true
+    github: opentalon/talon-plugin
+    ref: v0.2.0
+    config:
+      datalevin_url: "http://localhost:8898"
+
+  mcp-plugin:
+    enabled: true
+    github: opentalon/mcp-plugin
+    ref: master
+    config:
+      servers:
+        - server: testdb
+          url: http://localhost:8765/sse
+
+# Short tick so the crossing is observed within a couple of minutes; the poll
+# trigger's own interval (seeded/authored) is short to match.
+scheduler:
+  jobs:
+    - name: agents-tick
+      interval: "10s"
+      action: agents.tick
+
+state:
+  data_dir: /home/opentalon/.opentalon
+
+log:
+  file: /home/opentalon/.opentalon/opentalon.log

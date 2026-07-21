@@ -60,10 +60,28 @@ func (h *Handler) Execute(req pkg.Request) pkg.Response {
 	}
 }
 
-// Configure receives the host config block. The authoritative config is
-// read from OPENTALON_CONFIG at startup (main.go), so this only logs.
-func (h *Handler) Configure(string) error {
-	slog.Info("opentalon-agents: configured", "talon_plugin", h.cfg.TalonPluginName, "db_driver", h.cfg.DB.Driver)
+// Configure receives the host config block over the Init RPC, before any
+// Execute call. This is how the host actually delivers config — it does NOT
+// set OPENTALON_CONFIG on the subprocess — so we parse it here and apply it
+// into the shared *cfg (the handler and engine hold the same pointer).
+//
+// The DB handle is already open (main.go opened it from the startup default),
+// so a divergent DB config delivered here cannot switch the live handle — we
+// warn rather than silently ignore. Every other field (talon_plugin_name,
+// default_group_id, timeouts, backoff, webhook_secret) takes effect now.
+func (h *Handler) Configure(configJSON string) error {
+	parsed, err := config.Parse(configJSON)
+	if err != nil {
+		return fmt.Errorf("agents: configure: %w", err)
+	}
+	if parsed.DB.DSN != h.cfg.DB.DSN || parsed.DB.Driver != h.cfg.DB.Driver {
+		slog.Warn("opentalon-agents: DB config in Configure differs from startup, live DB handle unchanged",
+			"startup_driver", h.cfg.DB.Driver, "startup_dsn", h.cfg.DB.DSN,
+			"configured_driver", parsed.DB.Driver, "configured_dsn", parsed.DB.DSN)
+	}
+	*h.cfg = *parsed
+	h.talon = talonProxy{pluginName: h.cfg.TalonPluginName}
+	slog.Info("opentalon-agents: configured", "talon_plugin", h.cfg.TalonPluginName, "db_driver", h.cfg.DB.Driver, "default_group_id", h.cfg.DefaultGroupID)
 	return nil
 }
 
@@ -76,10 +94,19 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 		return h.actionTick(ctx, req, host)
 	}
 
-	rc := agent.RunContext{GroupID: req.Args["group_id"], EntityID: req.Args["entity_id"]}
-	if rc.GroupID == "" {
+	groupID := req.Args["group_id"]
+	if groupID == "" {
+		// devFallbackGroupID is "" in the prod build (build tag). Only the
+		// dev build (-tags dev) can resolve a non-empty fallback, and only
+		// from an explicit config value. Prod therefore always fails closed
+		// here: no path can create/act on an agent without an authenticated
+		// group_id, regardless of config or env.
+		groupID = devFallbackGroupID(h.cfg, req.Action)
+	}
+	if groupID == "" {
 		return errResp(req.ID, "missing group_id (should be injected by the host)")
 	}
+	rc := agent.RunContext{GroupID: groupID, EntityID: req.Args["entity_id"]}
 
 	switch req.Action {
 	case "create":
