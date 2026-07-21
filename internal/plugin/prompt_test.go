@@ -17,6 +17,7 @@ func TestPromptCoversWatcherAuthoring(t *testing.T) {
 		"on change attr",   // reactive pattern
 		"prev_value >= 10", // fire-once crossing idiom
 		"MUST match",       // attribute<->on-block linkage rule
+		"6-field cron is invalid", // steer away from seconds-cron toward poll interval
 	}
 	for _, s := range must {
 		if !strings.Contains(promptText, s) {
