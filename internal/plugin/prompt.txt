@@ -31,6 +31,8 @@ A watcher has two parts you provide together:
     }
   }
 
+The `poll` trigger does the FETCHING — do NOT call the polling MCP tool inside talon_source, and do NOT write a bare level check like `on current_stock < 10`. The engine polls the value and feeds it in as the fact your `on change attr` block watches; the only `mcp` step in talon_source is the ACTION taken when the block fires (here, creating the ticket). Author exactly a create(talon_source, triggers) — never a `pipeline` or other free-form structure, and never an `interval` trigger for a watcher (that is for schedules, not watched values).
+
 (b) triggers — a JSON array with a `poll` entry telling the engine WHAT to fetch each interval and HOW to turn it into the fact the on-block watches:
 
   [{"type":"poll","config":{
@@ -61,4 +63,5 @@ RULES
 - The poll/webhook `attribute` MUST match the `attr` in your `on change attr "..."` block.
 - `schedule` cron is 5-field, minute granularity. There is NO seconds field — a 6-field cron is invalid and will be rejected. For anything faster than a minute, use a `poll` trigger with a sub-minute `interval` ("30s").
 - Keep one clear task per agent.
+- Do NOT put the polling MCP call inside talon_source and do NOT emit a `pipeline`. A watcher is always create(talon_source = `on change attr` + workflow, triggers = a `poll` entry). The workflow's `mcp` step is the fire action only.
 - Validate by create (invalid Talon is rejected with diagnostics) or by run(id).
