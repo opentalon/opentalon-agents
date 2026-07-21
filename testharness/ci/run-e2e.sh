@@ -19,6 +19,8 @@
 #   BARCODE        watched barcode (default ABC-123)
 #   PROMPT         real-llm only: the authoring prompt piped to console stdin
 set -euo pipefail
+PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
+set -x
 
 BARCODE="${BARCODE:-ABC-123}"
 CONTAINER=opentalon-host
