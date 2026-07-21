@@ -62,6 +62,12 @@ trap 'rc=$?; if [ $rc -ne 0 ]; then echo "FAIL (rc=$rc)"; dump_logs; fi; cleanup
 
 psql_q() { psql "$DATABASE_URL" -tAc "$1"; }
 
+# The agents plugin's own store (sqlite), bind-mounted from the container's
+# /work/agents.db. Used to assert the authored agent + its run directly, so a
+# stray ticket can't masquerade as a passing authoring leg.
+AGENTS_DB="${WORK}/agents.db"
+agents_q() { sqlite3 "$AGENTS_DB" "$1"; }
+
 # start_proxy launches the Anthropic record/replay proxy on :8788 for the vcr
 # modes. The host container reaches it via base_url=http://localhost:8788 (set
 # through ANTHROPIC_BASE_URL in the rendered config). Deterministic mode skips it.
@@ -168,11 +174,25 @@ fail=0
 [ "$qty" = "50" ]    || { echo "FAIL: expected qty 50, got $qty"; fail=1; }
 [ "$fail" = "0" ] || exit 1
 
+# Prove the fire came from an authored agent, not some other path to the tickets
+# table: assert the stock-abc agent row exists in the agents store. (Authoring
+# modes have the LLM create it; deterministic pre-seeds it — both must be here.)
+acount="$(agents_q "SELECT count(*) FROM agents WHERE name = 'stock-abc'")"
+[ "${acount:-0}" -ge 1 ] || { echo "FAIL: expected a stock-abc agent row, got ${acount:-0}"; exit 1; }
+echo "agents(stock-abc)=$acount"
+
 # AC#4: the fire is a downward crossing, not a level. Let a few more ticks run
 # with the stock still at 8 and assert no second ticket is opened.
 echo "== waiting 30s to prove subsequent ticks don't re-fire =="
 sleep 30
 recount="$(psql_q 'SELECT count(*) FROM tickets')"
 [ "$recount" = "1" ] || { echo "FAIL: expected still 1 ticket after further ticks, got $recount"; exit 1; }
+
+# The agent actually executed to completion (not just that a ticket appeared):
+# assert at least one completed run recorded in the agents store. Checked after
+# the re-fire window so the firing run has settled to its terminal status.
+rcount="$(agents_q "SELECT count(*) FROM runs WHERE status = 'completed'")"
+[ "${rcount:-0}" -ge 1 ] || { echo "FAIL: expected >=1 completed run, got ${rcount:-0}"; exit 1; }
+echo "completed_runs=$rcount"
 
 echo "PASS: one refill ticket for $BARCODE qty 50, no re-fire"

@@ -6,9 +6,10 @@ name: E2E
 #
 # Three jobs:
 #   deterministic  (PR gate)        pre-seeds the agent, no LLM — fast + reliable.
-#   vcr-replay     (PR gate)        real authoring leg, served from a committed
+#   vcr-replay     (PR, label-gated) real authoring leg, served from a committed
 #                                   cassette via the vcr-proxy — deterministic,
 #                                   no secret. Proves chat -> LLM -> Talon agent.
+#                                   Opt-in: add the `e2e-vcr` label to a PR.
 #   vcr-record     (nightly/manual) drives the same authoring against real
 #                                   Anthropic through the proxy in record mode
 #                                   and uploads the refreshed cassette. Catches
@@ -21,6 +22,9 @@ name: E2E
 
 on:
   pull_request:
+    # `labeled` so adding the `e2e-vcr` label re-triggers and lets the vcr-replay
+    # job start on an already-open PR without a new push.
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "0 4 * * *"
   workflow_dispatch:
@@ -32,7 +36,8 @@ env:
 jobs:
   deterministic:
     name: E2E (deterministic, pre-seeded agent)
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # Fast PR gate on code changes; skip pure label events (no code changed).
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'labeled')
     runs-on: ubuntu-22.04
     services:
       postgres:
@@ -120,11 +125,13 @@ jobs:
 
   vcr-replay:
     name: E2E (VCR replay, real authoring leg)
-    # PR gate: replays the committed cassette (testharness/ci/cassette.json) so
+    # Label-gated PR job: add the `e2e-vcr` label to a PR to run it (or dispatch
+    # manually). Replays the committed cassette (testharness/ci/cassette.json) so
     # the chat -> LLM -> Talon authoring leg runs deterministically, no secret.
-    # Authoring bugs that blocked this are fixed (#35 sub-minute poll emitted a
-    # 6-field cron; opentalon/opentalon#313 agents.db SQLITE_BUSY under the tick).
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    # It is slow (host image build + plugin clones), hence opt-in rather than on
+    # every PR. Authoring bugs that blocked it are fixed (#35 sub-minute poll
+    # emitted a 6-field cron; opentalon/opentalon#313 agents.db SQLITE_BUSY).
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-vcr'))
     runs-on: ubuntu-22.04
     services:
       postgres:
