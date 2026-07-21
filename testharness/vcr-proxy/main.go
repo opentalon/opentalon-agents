@@ -199,7 +199,14 @@ func (p *proxy) serveRecord(w http.ResponseWriter, r *http.Request, reqBody []by
 		Response:      json.RawMessage(respBody),
 	})
 	n := len(p.cassette.Interactions)
+	// Persist after every interaction. `go run` doesn't forward SIGTERM to the
+	// compiled child, so a shutdown-only flush would lose the cassette in CI;
+	// writing incrementally makes the file complete at all times.
+	err = p.saveLocked()
 	p.mu.Unlock()
+	if err != nil {
+		log.Printf("vcr-proxy: save after interaction %d: %v", n, err)
+	}
 	log.Printf("vcr-proxy: recorded interaction %d (status %d, %d bytes)", n, upResp.StatusCode, len(respBody))
 
 	w.Header().Set("Content-Type", "application/json")
@@ -218,15 +225,24 @@ func (p *proxy) load() error {
 func (p *proxy) save() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.saveLocked()
+}
+
+// saveLocked writes the cassette; the caller must hold p.mu.
+func (p *proxy) saveLocked() error {
 	p.cassette.RecordedAt = time.Now().UTC()
 	data, err := json.MarshalIndent(&p.cassette, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(p.path, append(data, '\n'), 0o644); err != nil {
+	// Write-rename for atomicity: a crash mid-write can't leave a truncated file.
+	tmp := p.path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
 		return err
 	}
-	log.Printf("vcr-proxy: saved %d interactions to %s", len(p.cassette.Interactions), p.path)
+	if err := os.Rename(tmp, p.path); err != nil {
+		return err
+	}
 	return nil
 }
 
