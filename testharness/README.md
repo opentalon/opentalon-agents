@@ -8,7 +8,10 @@ data), through a tiny custom **MCP server**, in the **opentalon host** with the
 testharness/
   seed.sql          # items + tickets tables, deterministic rows
   mcp/              # custom MCP server (own go module), Postgres-backed
+  vcr-proxy/        # Anthropic record/replay proxy (own go module)
+  seed-agent/       # writes the watcher agent directly (deterministic gate)
   ci/config.yaml    # host config used by CI; a template for local runs
+  ci/cassette.json  # committed VCR cassette for the authoring leg
 ```
 
 ## Data flow
@@ -101,21 +104,53 @@ from `agents.db`, so replaying `8` fires nothing.
 
 `.github/workflows/e2e.yml` runs this stack headless against the **published
 host container** (`ghcr.io/opentalon/opentalon`), so nothing here needs building
-the host. Two jobs:
+the host. Three jobs:
 
 - **deterministic** (PR gate) — seeds the watcher directly with
   `go run ./testharness/seed-agent` (the exact agent the LLM authors, no model),
   then drives tick → drop stock → assert one ticket. Reliable.
-- **real-llm** (nightly + manual) — pipes the authoring prompt to the console
-  and lets a real model author the agent. Flaky by nature; not a gate.
+- **vcr-replay** (PR gate) — pipes the authoring prompt to the console; the host
+  calls Anthropic, but its `base_url` points at the **vcr-proxy** replaying
+  `ci/cassette.json`. Real authoring path (chat → LLM → Talon agent),
+  deterministic, **no secret**. Same tick → drop → assert.
+- **vcr-record** (nightly + manual) — same authoring, but the proxy runs in
+  record mode against real Anthropic and uploads a refreshed cassette artifact.
+  Catches prompt/model drift; a human reviews and commits the new cassette.
+  Needs the `ANTHROPIC_API_KEY` repo secret.
 
-Both stand up Postgres, **datalevin-server** (from the `opentalon/talon-language`
-repo — talon-plugin's backend at `:8898`) and the MCP server, mount the plugin
-binary + rendered `ci/config.yaml` into the container, and run
-`ci/run-e2e.sh`. Needs the `ANTHROPIC_API_KEY` repo secret.
+All three stand up Postgres, **datalevin-server** (from the
+`opentalon/talon-language` repo — talon-plugin's backend at `:8898`) and the MCP
+server, mount the plugin binary + rendered `ci/config.yaml` into the container,
+and run `ci/run-e2e.sh`.
 
 `ci/config.yaml` uses a 10s tick + 10s poll interval so the crossing is observed
 in a couple of minutes; `seed-agent` takes `AGENT_INTERVAL` to match.
+
+### VCR cassette
+
+The cassette records the Anthropic responses for the authoring turn(s). The
+proxy (`testharness/vcr-proxy`) sits at `<base_url>/v1/messages` and, like the
+host's own in-process VCR player, replays interactions **in order**, ignoring
+the request body (a request-hash mismatch only logs a warning). So the cassette
+is valid as long as the host makes the same sequence of LLM calls — a prompt or
+model change invalidates it, which the nightly `vcr-record` job surfaces.
+
+Two ways to (re)record, both needing the `ANTHROPIC_API_KEY` secret/key:
+
+- **CI (easiest):** trigger the workflow with `workflow_dispatch` (or wait for
+  the nightly). The `vcr-record` job runs the full stack, records, and uploads a
+  `vcr-cassette` artifact. Download it, drop it at `testharness/ci/cassette.json`,
+  and commit.
+- **Locally:** stand up the stack yourself (Postgres seeded, datalevin, MCP,
+  assembled `WORK`, built `HOST_IMAGE` — see `ci/e2e.yml` steps), then:
+  ```
+  MODE=vcr-record ANTHROPIC_API_KEY=sk-ant-... WORK=... HOST_IMAGE=... \
+    MCP_LOG=/tmp/mcp.log DATALEVIN_LOG=/tmp/dl.log \
+    bash testharness/ci/run-e2e.sh
+  ```
+  The proxy writes `testharness/ci/cassette.json` on exit. Commit it.
+
+The cassette stores only response bodies + a request hash — no API key.
 
 ## Smoke-test the MCP server alone
 

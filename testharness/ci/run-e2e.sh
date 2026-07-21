@@ -10,19 +10,31 @@
 #     the deterministic mode's pre-seeded agent)
 #
 # Env contract:
-#   MODE           deterministic | real-llm
+#   MODE           deterministic | vcr-replay | vcr-record
+#                    deterministic  pre-seeded agent, no LLM (fast gate)
+#                    vcr-replay     LLM authoring served from committed cassette
+#                    vcr-record     LLM authoring against real Anthropic; (re)writes cassette
 #   WORK           dir bind-mounted into the container as /work
 #   HOST_IMAGE     published host image (ghcr.io/opentalon/opentalon:...)
 #   DATABASE_URL   postgres DSN for psql assertions
 #   MCP_LOG        path to the testharness MCP server's log file
 #   DATALEVIN_LOG  path to datalevin-server's log file
 #   BARCODE        watched barcode (default ABC-123)
-#   PROMPT         real-llm only: the authoring prompt piped to console stdin
+#   PROMPT         authoring modes: the prompt piped to console stdin
+#   VCR_CASSETTE   cassette path (default testharness/ci/cassette.json)
+#   ANTHROPIC_API_KEY  vcr-record only: real key for the proxy's upstream
 set -euo pipefail
 
 BARCODE="${BARCODE:-ABC-123}"
 CONTAINER=opentalon-host
 FIFO=""
+PROXY_PID=""
+CASSETTE="${VCR_CASSETTE:-testharness/ci/cassette.json}"
+PROXY_LOG="${PROXY_LOG:-/tmp/vcr-proxy.log}"
+
+# authoring: every mode except deterministic drives the LLM to author the agent.
+AUTHOR=1
+[ "$MODE" = "deterministic" ] && AUTHOR=0
 
 dump_logs() {
   echo "::group::host container state"
@@ -37,15 +49,45 @@ dump_logs() {
   echo "::group::opentalon.log (in container)"
   docker exec "$CONTAINER" tail -200 /home/opentalon/.opentalon/opentalon.log 2>/dev/null || true
   echo "::endgroup::"
+  echo "::group::vcr-proxy log"; tail -100 "$PROXY_LOG" 2>/dev/null || true; echo "::endgroup::"
 }
 cleanup() {
   [ -n "$FIFO" ] && exec 3>&- 2>/dev/null || true
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  # SIGTERM (not kill -9) so a recording proxy flushes its cassette to disk.
+  [ -n "$PROXY_PID" ] && { kill -TERM "$PROXY_PID" 2>/dev/null || true; wait "$PROXY_PID" 2>/dev/null || true; }
   [ -n "$FIFO" ] && rm -f "$FIFO" || true
 }
 trap 'rc=$?; if [ $rc -ne 0 ]; then echo "FAIL (rc=$rc)"; dump_logs; fi; cleanup; exit $rc' EXIT
 
 psql_q() { psql "$DATABASE_URL" -tAc "$1"; }
+
+# start_proxy launches the Anthropic record/replay proxy on :8788 for the vcr
+# modes. The host container reaches it via base_url=http://localhost:8788 (set
+# through ANTHROPIC_BASE_URL in the rendered config). Deterministic mode skips it.
+start_proxy() {
+  local vcr_mode
+  case "$MODE" in
+    vcr-record) vcr_mode=record ;;
+    vcr-replay) vcr_mode=replay ;;
+    *) return 0 ;;
+  esac
+  if [ "$vcr_mode" = "replay" ] && [ ! -f "$CASSETTE" ]; then
+    echo "no cassette at $CASSETTE; record one with MODE=vcr-record (needs ANTHROPIC_API_KEY)"; exit 1
+  fi
+  # Absolute so the `cd` below doesn't reinterpret a relative cassette path.
+  case "$CASSETTE" in /*) ;; *) CASSETTE="${GITHUB_WORKSPACE:-$PWD}/$CASSETTE" ;; esac
+  echo "== starting vcr-proxy (mode=$vcr_mode cassette=$CASSETTE) =="
+  ( cd testharness/vcr-proxy && \
+    VCR_MODE="$vcr_mode" VCR_CASSETTE="$CASSETTE" ADDR=:8788 \
+    ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" go run . ) > "$PROXY_LOG" 2>&1 &
+  PROXY_PID=$!
+  for _ in $(seq 1 30); do
+    curl -sf http://localhost:8788/health >/dev/null 2>&1 && { echo "vcr-proxy up"; return 0; }
+    sleep 1
+  done
+  echo "vcr-proxy did not start"; cat "$PROXY_LOG"; exit 1
+}
 
 start_host() {
   FIFO="$(mktemp -u)"; mkfifo "$FIFO"
@@ -65,7 +107,7 @@ start_host() {
     docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$" && break
     sleep 1
   done
-  if [ "$MODE" = "real-llm" ]; then
+  if [ "$AUTHOR" = "1" ]; then
     echo "waiting 30s for host + plugins to build before authoring"
     sleep 30
     printf '%s\n' "$PROMPT" >&3
@@ -95,6 +137,7 @@ wait_for_log() {
 }
 
 echo "== starting host ($MODE) =="
+start_proxy
 start_host
 
 # First poll must observe the pre-drop stock (15) so a snapshot is established;
@@ -124,4 +167,12 @@ fail=0
 [ "$bc" = "$BARCODE" ] || { echo "FAIL: expected barcode $BARCODE, got $bc"; fail=1; }
 [ "$qty" = "50" ]    || { echo "FAIL: expected qty 50, got $qty"; fail=1; }
 [ "$fail" = "0" ] || exit 1
-echo "PASS: one refill ticket for $BARCODE qty 50"
+
+# AC#4: the fire is a downward crossing, not a level. Let a few more ticks run
+# with the stock still at 8 and assert no second ticket is opened.
+echo "== waiting 30s to prove subsequent ticks don't re-fire =="
+sleep 30
+recount="$(psql_q 'SELECT count(*) FROM tickets')"
+[ "$recount" = "1" ] || { echo "FAIL: expected still 1 ticket after further ticks, got $recount"; exit 1; }
+
+echo "PASS: one refill ticket for $BARCODE qty 50, no re-fire"

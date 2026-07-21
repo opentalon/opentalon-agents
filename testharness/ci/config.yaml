@@ -1,19 +1,25 @@
 # opentalon HOST config for the CI full-stack E2E.
 #
-# Rendered by the e2e workflow with `envsubst`; only ${ANTHROPIC_API_KEY} is
-# substituted. Everything else is fixed so the run is deterministic.
+# Rendered by the e2e workflow with `envsubst`; ${ANTHROPIC_API_KEY} and
+# ${ANTHROPIC_BASE_URL} are substituted. Everything else is fixed so the run is
+# deterministic.
 #
 # Runs inside the published host container with `--network host`, so every
 # `localhost` below is the CI runner's network namespace:
 #   - postgres        service container, :5432 (behind the testharness MCP)
 #   - datalevin-server :8898 (talon-plugin backend)
 #   - testharness MCP  :8765 (bridged by mcp-plugin)
+#   - vcr-proxy        :8788 (Anthropic record/replay; empty base_url in
+#                             deterministic mode, which never calls the LLM)
 # Paths under /work are the runner dir bind-mounted into the container.
 
 models:
   providers:
     anthropic:
       api_key: "${ANTHROPIC_API_KEY}"
+      # Empty -> provider default (real api.anthropic.com). The vcr-replay and
+      # vcr-record jobs point this at the local proxy.
+      base_url: "${ANTHROPIC_BASE_URL}"
       api: anthropic-messages
       models:
         - id: claude-haiku-4-5-20251001
