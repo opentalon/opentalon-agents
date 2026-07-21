@@ -25,8 +25,12 @@ CONTAINER=opentalon-host
 FIFO=""
 
 dump_logs() {
-  echo "::group::host container logs"
-  docker logs "$CONTAINER" 2>&1 | tail -300 || true
+  echo "::group::host container state"
+  docker inspect -f 'Status={{.State.Status}} ExitCode={{.State.ExitCode}} Error={{.State.Error}} OOMKilled={{.State.OOMKilled}}' "$CONTAINER" 2>&1 || true
+  docker ps -a --filter "name=$CONTAINER" 2>&1 || true
+  echo "::endgroup::"
+  echo "::group::host container logs (tail)"
+  docker logs "$CONTAINER" 2>&1 | tail -60 || true
   echo "::endgroup::"
   echo "::group::datalevin log"; tail -100 "$DATALEVIN_LOG" 2>/dev/null || true; echo "::endgroup::"
   echo "::group::mcp log"; tail -100 "$MCP_LOG" 2>/dev/null || true; echo "::endgroup::"
@@ -72,8 +76,10 @@ start_host() {
 wait_for_log() {
   local pat="$1" timeout="$2" waited=0
   until grep -q "$pat" "$MCP_LOG" 2>/dev/null; do
-    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-      echo "host container exited early"; return 1
+    local state
+    state="$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo missing)"
+    if [ "$state" != "true" ]; then
+      echo "host container not running (state=$state)"; return 1
     fi
     sleep 3; waited=$((waited+3))
     if [ "$waited" -ge "$timeout" ]; then
