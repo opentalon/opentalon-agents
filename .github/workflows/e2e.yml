@@ -106,8 +106,12 @@ jobs:
 
       - name: Build host image (opentalon PR #312; drop once merged)
         run: |
-          docker build --build-arg BRANCH="$HOST_BRANCH" -t "$HOST_IMAGE" \
+          docker build --build-arg BRANCH="$HOST_BRANCH" -t opentalon-host:base \
             "https://github.com/opentalon/opentalon.git#${HOST_BRANCH}"
+          # The runtime image (golang:alpine) has git+go but no make, which the
+          # console channel needs to build itself on first run. Overlay it in.
+          printf 'FROM opentalon-host:base\nUSER root\nRUN apk add --no-cache make\nUSER opentalon\n' > Dockerfile.hostci
+          docker build -f Dockerfile.hostci -t "$HOST_IMAGE" .
 
       - name: Run E2E
         env:
@@ -189,8 +193,12 @@ jobs:
 
       - name: Build host image (opentalon PR #312; drop once merged)
         run: |
-          docker build --build-arg BRANCH="$HOST_BRANCH" -t "$HOST_IMAGE" \
+          docker build --build-arg BRANCH="$HOST_BRANCH" -t opentalon-host:base \
             "https://github.com/opentalon/opentalon.git#${HOST_BRANCH}"
+          # The runtime image (golang:alpine) has git+go but no make, which the
+          # console channel needs to build itself on first run. Overlay it in.
+          printf 'FROM opentalon-host:base\nUSER root\nRUN apk add --no-cache make\nUSER opentalon\n' > Dockerfile.hostci
+          docker build -f Dockerfile.hostci -t "$HOST_IMAGE" .
 
       - name: Run E2E
         env:

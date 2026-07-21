@@ -44,19 +44,18 @@ trap 'rc=$?; if [ $rc -ne 0 ]; then echo "FAIL (rc=$rc)"; dump_logs; fi; cleanup
 psql_q() { psql "$DATABASE_URL" -tAc "$1"; }
 
 start_host() {
+  FIFO="$(mktemp -u)"; mkfifo "$FIFO"
+  # Open read-write first so the container's `< FIFO` doesn't block waiting for a
+  # writer, and hold fd 3 open so the console channel's stdin stays connected —
+  # the host exits once it has no live channel. Both modes keep it open; only
+  # real-llm writes the authoring prompt to it.
+  exec 3<>"$FIFO"
+  docker run -d -i --name "$CONTAINER" --network host \
+    -v "$WORK":/work -w /work "$HOST_IMAGE" -config /work/config.yaml < "$FIFO"
   if [ "$MODE" = "real-llm" ]; then
-    FIFO="$(mktemp -u)"; mkfifo "$FIFO"
-    # Open read-write first so the container's `< FIFO` doesn't block waiting for
-    # a writer, and hold fd 3 open to keep the console channel's stdin connected.
-    exec 3<>"$FIFO"
-    docker run -d -i --name "$CONTAINER" --network host \
-      -v "$WORK":/work -w /work "$HOST_IMAGE" -config /work/config.yaml < "$FIFO"
     echo "waiting 30s for host + plugins to build before authoring"
     sleep 30
     printf '%s\n' "$PROMPT" >&3
-  else
-    docker run -d --name "$CONTAINER" --network host \
-      -v "$WORK":/work -w /work "$HOST_IMAGE" -config /work/config.yaml
   fi
 }
 
