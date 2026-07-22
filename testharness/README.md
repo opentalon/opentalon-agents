@@ -114,10 +114,16 @@ the host. Three jobs:
   replaying `ci/cassette.json`. Real authoring path (chat → LLM → Talon agent),
   deterministic, **no secret**. Same tick → drop → assert. Opt-in because it's
   slow (see below).
-- **vcr-record** (nightly + manual) — same authoring, but the proxy runs in
-  record mode against real Anthropic and uploads a refreshed cassette artifact.
-  Catches prompt/model drift; a human reviews and commits the new cassette.
-  Needs the `ANTHROPIC_API_KEY` repo secret.
+- **cassette-check** (PR gate) — fast, no stack: fails if the committed
+  cassette's `prompt_hash` doesn't match `sha256(internal/plugin/prompt.txt)`,
+  i.e. the authoring prompt changed but the cassette wasn't re-recorded.
+- **vcr-record** (release + manual) — same authoring, but the proxy runs in
+  record mode against real Anthropic, stamps the current `prompt_hash`, and on a
+  **published release** commits the refreshed cassette to master. Manual
+  dispatch instead uploads it as a `vcr-cassette` artifact for review. Needs the
+  `ANTHROPIC_API_KEY` repo secret. We re-record only when it matters — a prompt
+  change (surfaced by cassette-check) or a release — not on a nightly timer,
+  mirroring opentalon's VCR flow.
 
 Beyond the ticket, `run-e2e.sh` asserts the authoring leg directly against
 `agents.db`: the `stock-abc` agent row exists and at least one run reached
@@ -153,14 +159,20 @@ proxy (`testharness/vcr-proxy`) sits at `<base_url>/v1/messages` and, like the
 host's own in-process VCR player, replays interactions **in order**, ignoring
 the request body (a request-hash mismatch only logs a warning). So the cassette
 is valid as long as the host makes the same sequence of LLM calls — a prompt or
-model change invalidates it, which the nightly `vcr-record` job surfaces.
+model change invalidates it, which the `cassette-check` job surfaces.
+
+The cassette carries a `prompt_hash` = `sha256(internal/plugin/prompt.txt)`
+(computed by `ci/prompt-hash.sh`). The **cassette-check** job recomputes it on
+every PR and fails if it drifts, so a prompt change can't silently ship against
+a stale recording — that red check is the signal to re-record.
 
 Two ways to (re)record, both needing the `ANTHROPIC_API_KEY` secret/key:
 
-- **CI (easiest):** trigger the workflow with `workflow_dispatch` (or wait for
-  the nightly). The `vcr-record` job runs the full stack, records, and uploads a
-  `vcr-cassette` artifact. Download it, drop it at `testharness/ci/cassette.json`,
-  and commit.
+- **CI (easiest):** trigger the workflow with `workflow_dispatch`. The
+  `vcr-record` job runs the full stack, records, stamps the current
+  `prompt_hash`, and uploads a `vcr-cassette` artifact. Download it, drop it at
+  `testharness/ci/cassette.json`, and commit. (On a **published release** the
+  same job commits the refreshed cassette to master automatically.)
 - **Locally:** stand up the stack yourself (Postgres seeded, datalevin, MCP,
   assembled `WORK`, built `HOST_IMAGE` — see `ci/e2e.yml` steps), then:
   ```
@@ -168,7 +180,12 @@ Two ways to (re)record, both needing the `ANTHROPIC_API_KEY` secret/key:
     MCP_LOG=/tmp/mcp.log DATALEVIN_LOG=/tmp/dl.log \
     bash testharness/ci/run-e2e.sh
   ```
-  The proxy writes `testharness/ci/cassette.json` on exit. Commit it.
+  The proxy writes `testharness/ci/cassette.json` on exit. Stamp the current
+  prompt hash before committing (CI does this for you):
+  ```
+  jq --arg h "$(bash testharness/ci/prompt-hash.sh)" '. + {prompt_hash:$h}' \
+    testharness/ci/cassette.json > c.tmp && mv c.tmp testharness/ci/cassette.json
+  ```
 
 The cassette stores only response bodies + a request hash — no API key.
 
