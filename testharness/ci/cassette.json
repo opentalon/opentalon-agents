@@ -12,7 +12,7 @@
         "content": [
           {
             "type": "text",
-            "text": "```json\n{\n  \"type\": \"pipeline\",\n  \"steps\": [\n    {\n      \"id\": \"create_agent\",\n      \"name\": \"Create stock-abc agent with polling trigger\",\n      \"plugin\": \"agents\",\n      \"action\": \"create\",\n      \"args\": {\n        \"name\": \"stock-abc\",\n        \"description\": \"Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10\",\n        \"talon_source\": \"workflow \\\"check_stock\\\" {\\n  step \\\"get_item\\\" {\\n    mcp \\\"testdb\\\" action=\\\"testdb__get_item\\\" barcode=\\\"ABC-123\\\"\\n  }\\n  step \\\"create_ticket\\\" {\\n    when current_stock \u003c 10\\n    mcp \\\"testdb\\\" action=\\\"testdb__create_ticket\\\" barcode=\\\"ABC-123\\\" qty=50\\n  }\\n}\\n\\non fact current_stock \u003c 10 {\\n  workflow \\\"check_stock\\\" {}\\n}\",\n        \"triggers\": [\n          {\n            \"type\": \"schedule\",\n            \"interval\": \"10s\"\n          }\n        ]\n      },\n      \"depends_on\": []\n    }\n  ]\n}\n```"
+            "text": "```json\n{\n  \"type\": \"pipeline\",\n  \"steps\": [\n    {\n      \"id\": \"create_agent\",\n      \"name\": \"Create stock-abc agent with polling trigger\",\n      \"plugin\": \"agents\",\n      \"action\": \"create\",\n      \"args\": {\n        \"name\": \"stock-abc\",\n        \"description\": \"Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10\",\n        \"talon_source\": \"workflow \\\"check_stock\\\" {\\n  step \\\"get_item\\\" {\\n    mcp \\\"testdb\\\" action=\\\"testdb__get_item\\\" barcode=\\\"ABC-123\\\"\\n  }\\n  step \\\"create_ticket\\\" {\\n    when current_stock < 10\\n    mcp \\\"testdb\\\" action=\\\"testdb__create_ticket\\\" barcode=\\\"ABC-123\\\" qty=50\\n  }\\n}\\n\\non fact current_stock < 10 {\\n  workflow \\\"check_stock\\\" {}\\n}\",\n        \"triggers\": [\n          {\n            \"type\": \"schedule\",\n            \"interval\": \"10s\"\n          }\n        ]\n      },\n      \"depends_on\": []\n    }\n  ]\n}\n```"
           }
         ],
         "stop_reason": "end_turn",
@@ -52,7 +52,7 @@
             "input": {
               "name": "stock-abc",
               "description": "Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10",
-              "talon_source": "on change attr \"current_stock\" {\n  when prev_value \u003e= 10 and new_value \u003c 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
+              "talon_source": "on change attr \"current_stock\" {\n  when prev_value >= 10 and new_value < 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
               "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]"
             },
             "caller": {
@@ -139,7 +139,7 @@
             "input": {
               "description": "Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10",
               "name": "stock-abc",
-              "talon_source": "on change attr \"current_stock\" {\n  when prev_value \u003e= 10 and new_value \u003c 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
+              "talon_source": "on change attr \"current_stock\" {\n  when prev_value >= 10 and new_value < 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
               "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]"
             },
             "caller": {
@@ -175,7 +175,7 @@
         "content": [
           {
             "type": "text",
-            "text": "Perfect! I've created the agent **stock-abc**. It will:\n\n- **Poll** the testdb server every 10 seconds to fetch the current stock level for item ABC-123\n- **Monitor** the `current_stock` attribute and watch for when it crosses from ≥10 to \u003c10\n- **Fire once** on that transition and create a refill ticket for 50 units\n\nThe agent is enabled and ready to run. When stock drops below 10, it will automatically open a refill ticket."
+            "text": "Perfect! I've created the agent **stock-abc**. It will:\n\n- **Poll** the testdb server every 10 seconds to fetch the current stock level for item ABC-123\n- **Monitor** the `current_stock` attribute and watch for when it crosses from ≥10 to <10\n- **Fire once** on that transition and create a refill ticket for 50 units\n\nThe agent is enabled and ready to run. When stock drops below 10, it will automatically open a refill ticket."
           }
         ],
         "stop_reason": "end_turn",
@@ -226,5 +226,6 @@
         }
       }
     }
-  ]
+  ],
+  "prompt_hash": "4e1c14a27331b437facb5f10f17e9dddc601d8bfc775d95997913705eca52ea6"
 }

@@ -4,17 +4,25 @@ name: E2E
 # datalevin + the testharness MCP server, runs the published opentalon host
 # container, and asserts the stock watcher fires exactly one refill ticket.
 #
-# Three jobs:
+# Four jobs:
+#   cassette-check (PR gate)        fast, no stack: fails if the committed
+#                                   cassette's prompt_hash != the current
+#                                   prompt.txt hash — i.e. the prompt changed but
+#                                   the cassette wasn't re-recorded.
 #   deterministic  (PR gate)        pre-seeds the agent, no LLM — fast + reliable.
 #   vcr-replay     (PR, label-gated) real authoring leg, served from a committed
 #                                   cassette via the vcr-proxy — deterministic,
 #                                   no secret. Proves chat -> LLM -> Talon agent.
 #                                   Opt-in: add the `e2e-vcr` label to a PR.
-#   vcr-record     (nightly/manual) drives the same authoring against real
-#                                   Anthropic through the proxy in record mode
-#                                   and uploads the refreshed cassette. Catches
-#                                   drift (prompt/model change) and produces the
-#                                   artifact a human reviews and commits.
+#   vcr-record     (release/manual) drives the same authoring against real
+#                                   Anthropic through the proxy in record mode,
+#                                   stamps the current prompt_hash, and on a
+#                                   published release commits the refreshed
+#                                   cassette to master (manual dispatch just
+#                                   uploads it as an artifact for review).
+#
+# We re-record only when it matters — a prompt change (caught by cassette-check)
+# or a release — instead of nightly, mirroring opentalon's VCR flow.
 #
 # vcr-record requires repo secret ANTHROPIC_API_KEY. talon-language
 # (datalevin-server) and opentalon/{console-channel,talon-plugin,mcp-plugin}
@@ -25,8 +33,10 @@ on:
     # `labeled` so adding the `e2e-vcr` label re-triggers and lets the vcr-replay
     # job start on an already-open PR without a new push.
     types: [opened, synchronize, reopened, labeled]
-  schedule:
-    - cron: "0 4 * * *"
+  release:
+    # Re-record against the real model when a release is published (the point we
+    # accept current model behavior), then commit the refreshed cassette.
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -34,6 +44,30 @@ env:
   HOST_IMAGE: "opentalon-host:ci"
 
 jobs:
+  cassette-check:
+    name: E2E (cassette freshness)
+    # Cheap gate on every PR: the committed cassette must have been recorded
+    # under the current prompt. Prompt changed without re-recording -> red PR.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'labeled')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify cassette prompt_hash matches prompt.txt
+        run: |
+          have="$(jq -r '.prompt_hash // ""' testharness/ci/cassette.json)"
+          want="$(bash testharness/ci/prompt-hash.sh)"
+          if [ -z "$have" ]; then
+            echo "cassette has no prompt_hash; re-record it (publish a release or run the vcr-record workflow)"; exit 1
+          fi
+          if [ "$have" != "$want" ]; then
+            echo "prompt.txt changed but the cassette is stale:"
+            echo "  cassette prompt_hash = $have"
+            echo "  current  prompt_hash = $want"
+            echo "Re-record: run the E2E workflow (workflow_dispatch) or publish a release, then commit testharness/ci/cassette.json."
+            exit 1
+          fi
+          echo "cassette prompt_hash matches prompt.txt ($want)"
+
   deterministic:
     name: E2E (deterministic, pre-seeded agent)
     # Fast PR gate on code changes; skip pure label events (no code changed).
@@ -220,8 +254,11 @@ jobs:
 
   vcr-record:
     name: E2E (VCR record, real Anthropic)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
+    # contents:write so the release run can commit the refreshed cassette to master.
+    permissions:
+      contents: write
     services:
       postgres:
         image: postgres:16
@@ -234,6 +271,9 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On a release, land on master so the refreshed cassette commits there.
+          ref: ${{ github.event_name == 'release' && 'master' || github.ref }}
       - uses: actions/checkout@v4
         with:
           repository: opentalon/talon-language
@@ -268,7 +308,7 @@ jobs:
       - name: Build agents plugin (dev group fallback)
         run: CGO_ENABLED=0 make build BUILD_FLAGS="-tags dev"
 
-      - name: Start testharness MCP server
+      - name: Start testharness MCP server (record)
         run: |
           cd testharness/mcp
           nohup env DATABASE_URL="$DATABASE_URL" ADDR=:8765 go run . > "$GITHUB_WORKSPACE/mcp.log" 2>&1 &
@@ -307,6 +347,14 @@ jobs:
             barcode=ABC-123 every 10 seconds; the stock value is at current_stock.
         run: bash testharness/ci/run-e2e.sh
 
+      - name: Stamp current prompt_hash into cassette
+        run: |
+          [ -f testharness/ci/cassette.json ] || { echo "no cassette to stamp"; exit 0; }
+          h="$(bash testharness/ci/prompt-hash.sh)"
+          jq --arg h "$h" '. + {prompt_hash: $h}' testharness/ci/cassette.json > testharness/ci/cassette.json.tmp
+          mv testharness/ci/cassette.json.tmp testharness/ci/cassette.json
+          echo "stamped prompt_hash=$h"
+
       - name: Upload refreshed cassette
         if: always()
         uses: actions/upload-artifact@v4
@@ -314,3 +362,17 @@ jobs:
           name: vcr-cassette
           path: testharness/ci/cassette.json
           if-no-files-found: warn
+
+      - name: Commit refreshed cassette to master
+        # Only on a published release, and only if the record run passed.
+        if: github.event_name == 'release' && success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add testharness/ci/cassette.json
+          if git diff --cached --quiet; then
+            echo "cassette unchanged; nothing to commit"
+          else
+            git commit -m "chore: re-record VCR cassette for ${{ github.event.release.tag_name }}"
+            git push origin HEAD:master
+          fi
