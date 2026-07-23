@@ -171,6 +171,111 @@ Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` does
 
 ---
 
+## A real example: the watcher that investigates and asks you
+
+The stock watcher above takes a **fixed** action on fire (open a ticket) — no model at run time. Some tasks instead need *judgement* when they fire: *"stock is trending down — which items are actually at risk given lead times, and should I reorder or just alert you?"* That's an LLM turn with a **question back to the user**, triggered by a deterministic signal. Opt in with the **`escalate`** argument.
+
+**In chat:** *"Watch all my inventory SKUs, and when any of them drops below 20, look into which ones are genuinely at risk and check with me before ordering anything."*
+
+The LLM authors the **same kind of watcher** — detection stays deterministic — but leaves the reaction to an escalation turn:
+
+**`talon_source`** — a coarse, deterministic trip. The `when` threshold is a literal (a watcher can't compare against another fact), so the *nuanced* per-SKU reasoning is deferred to the escalation turn:
+
+```talon
+on change attr "current_stock" {
+  when prev_value >= 20 and new_value < 20
+  workflow "Flag for review"
+}
+
+# No fixed action here — the reaction IS the escalation turn the plugin starts
+# when this block fires. Keep the workflow a light marker (some Talon builds
+# want at least one step); the real work happens in the assistant turn.
+workflow "Flag for review" {
+  step "note" { mcp "log" "info" { message "SKU crossed the review threshold" } }
+}
+```
+
+**`triggers`** — one poll fans out over every SKU in the response (`items_path`), so the *same* on-block fires per item that crosses:
+
+```json
+[
+  {
+    "type": "poll",
+    "config": {
+      "server": "inventory",
+      "tool": "list-items",
+      "interval": "10m",
+      "items_path": "items",
+      "value_path": "current_stock",
+      "id_field": "barcode",
+      "attribute": "current_stock"
+    }
+  }
+]
+```
+
+**`escalate`** — the opt-in. Detection stays deterministic; only the reaction becomes model-driven, so it's rate-limited:
+
+```json
+{ "enabled": true, "max_per_window": 5, "window_seconds": 3600 }
+```
+
+`create` also captures the caller's `session_id` (injected by the host) — that's the channel the escalation turn runs in and pushes its reply to.
+
+### What happens when it fires
+
+When a SKU crosses `20 → below`, the engine records the firing **and** starts a background assistant turn in the user's session (via the host's built-in `_escalate` entrypoint — enabled with `orchestrator.escalation.enabled`). The turn is seeded with a synthesized prompt built from the agent's stored `description` (the user's original ask), what tripped, and the observed facts:
+
+```
+Your background agent "sku-reorder-watch" just fired and escalated to you.
+
+What the user originally asked for:
+watch all inventory SKUs; when any drops below 20, check which are at risk and ask me before ordering
+
+What tripped the watcher:
+- on-block "on change attr \"current_stock\"" for ABC-123 (workflow)
+- on-block "on change attr \"current_stock\"" for XYZ-9 (workflow)
+
+Latest observed values (facts):
+[{"record_id":"1","attribute":"current_stock","value":18},{"record_id":"4","attribute":"current_stock","value":6}]
+
+Investigate what is going on — you may fan out focused sub-agent checks to look into
+each affected entity — then decide what, if anything, should be done. Come back to the
+user with a short summary and ask how they would like to proceed. Do not take
+irreversible action without confirming with the user first.
+```
+
+The assistant then **investigates with sub-agent checks** (one per at-risk SKU — supplier lead time, open POs), synthesizes, and **asks the user** — its reply is pushed to their channel tagged agent-originated (`source: agent`, `agent_id`, `trigger: poll`):
+
+> Two SKUs crossed the line. **XYZ-9** is the real risk: 6 units left, ~3-week supplier lead time, no open PO — it'll stock out before a reorder lands. **ABC-123** (18 units) is comfortably covered by an open PO arriving Friday.
+>
+> Want me to raise a reorder for **XYZ-9** now (I'd suggest 200 units to cover the lead time), or just keep alerting you? ABC-123 I'd leave alone.
+
+The user replies in the same conversation — *"Reorder XYZ-9, 200 units."* — and the **next turn acts** (opens the PO through the appropriate tool). Detection stayed deterministic and cheap; the LLM only ran once the signal tripped, and nothing irreversible happened without a human OK.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as opentalon-agents
+  participant O as orchestrator
+  participant E as _escalate (host)
+  participant Sub as sub-agent checks
+  participant U as user's channel
+
+  Note over A: watcher fires (XYZ-9 crosses 20→6)<br/>escalate=true, within rate limit
+  A->>O: RunAction(_escalate.turn {session_id, prompt,<br/>entity_id, group_id, source:agent, agent_id, trigger:poll})
+  O->>E: start background turn (seed prompt hidden)
+  E->>Sub: investigate each at-risk SKU (lead time, open POs)
+  Sub-->>E: XYZ-9 at risk; ABC-123 covered
+  E-->>U: push reply (tagged source:agent) — "…reorder XYZ-9 now, or just alert?"
+  U->>O: "Reorder XYZ-9, 200 units."
+  O-->>U: next turn opens the PO
+```
+
+Guardrails: escalation is **opt-in per agent**, **edge-triggered** (fires on the crossing, not every tick), and **rate-limited** (`max_per_window` / `window_seconds`, per-agent or via the plugin defaults). Turns cost tokens and are billed to the agent owner's chat budget, so a flapping signal can't run away.
+
+---
+
 ## Actions
 
 | Action | Description |
