@@ -106,7 +106,7 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 	if groupID == "" {
 		return errResp(req.ID, "missing group_id (should be injected by the host)")
 	}
-	rc := agent.RunContext{GroupID: groupID, EntityID: req.Args["entity_id"]}
+	rc := agent.RunContext{GroupID: groupID, EntityID: req.Args["entity_id"], SessionID: req.Args["session_id"]}
 
 	switch req.Action {
 	case "create":
@@ -157,6 +157,10 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err := agent.ValidateTriggers(triggers); err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	spec, err := agent.ParseEscalationSpec(req.Args["escalate"])
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
@@ -171,6 +175,9 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	})
 	if err != nil {
 		return errResp(req.ID, err.Error())
+	}
+	if resp, bad := h.saveEscalation(ctx, req.ID, a.ID, rc, spec); bad {
+		return resp
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Created agent %q (id %s).", a.Name, a.ID), summarize(a))
 }
@@ -195,6 +202,15 @@ func (h *Handler) actionShow(ctx context.Context, req pkg.Request, rc agent.RunC
 	view := summarize(a)
 	view["talon_source"] = a.TalonSource
 	view["triggers"] = a.Triggers
+	if esc, found, err := h.mgr.GetEscalation(ctx, a.ID); err == nil && found && esc.Enabled {
+		view["escalation"] = map[string]any{
+			"enabled":         esc.Enabled,
+			"session_id":      esc.SessionID,
+			"prompt_template": esc.PromptTemplate,
+			"max_per_window":  esc.MaxPerWindow,
+			"window_seconds":  esc.WindowSeconds,
+		}
+	}
 	return jsonResp(req.ID, fmt.Sprintf("Agent %q (id %s).", a.Name, a.ID), view)
 }
 
@@ -245,12 +261,19 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err := agent.ValidateTriggers(triggers); err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	spec, err := agent.ParseEscalationSpec(req.Args["escalate"])
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
 	a, err := h.mgr.Update(ctx, rc.GroupID, req.Args["id"], src, triggers)
 	if err != nil {
 		return errResp(req.ID, err.Error())
+	}
+	if resp, bad := h.saveEscalation(ctx, req.ID, a.ID, rc, spec); bad {
+		return resp
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Updated agent %q (id %s).", a.Name, a.ID), summarize(a))
 }
@@ -272,6 +295,30 @@ func (h *Handler) actionDelete(ctx context.Context, req pkg.Request, rc agent.Ru
 		return errResp(req.ID, err.Error())
 	}
 	return pkg.Response{CallID: req.ID, Content: "Deleted."}
+}
+
+// saveEscalation persists the agent's escalation config when the author
+// supplied one (spec != nil); a nil spec leaves any existing config untouched.
+// Opting in requires a target session to address the reply to: reject enable
+// with no session unless one was already stored (an update from a
+// non-interactive path can keep the session captured at create time).
+func (h *Handler) saveEscalation(ctx context.Context, callID, agentID string, rc agent.RunContext, spec *agent.EscalationSpec) (pkg.Response, bool) {
+	if spec == nil {
+		return pkg.Response{}, false
+	}
+	if spec.Enabled && rc.SessionID == "" {
+		existing, found, err := h.mgr.GetEscalation(ctx, agentID)
+		if err != nil {
+			return errResp(callID, err.Error()), true
+		}
+		if !found || existing.SessionID == "" {
+			return errResp(callID, "escalate.enabled needs an interactive session to address the turn to, but none is available here"), true
+		}
+	}
+	if err := h.mgr.SaveEscalation(ctx, agentID, rc.SessionID, *spec); err != nil {
+		return errResp(callID, err.Error()), true
+	}
+	return pkg.Response{}, false
 }
 
 // validate runs talon-plugin.check and, on invalid source, returns a

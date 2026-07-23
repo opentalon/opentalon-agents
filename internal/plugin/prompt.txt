@@ -58,6 +58,22 @@ Instead of polling, an external system can PUSH data. Use a `webhook` trigger �
 
 The system then POSTs the data to `/v1/hooks/<agent-name>?user_id=<the user>` with header `Authorization: Bearer <webhook_secret>` (a shared secret the operator configures). The body is mapped to a fact exactly like a poll and evaluated on the next tick. Tell the user this URL if they want to drive the agent by webhook.
 
+ESCALATION (fire → investigate → ask the user)
+By default a watcher's reaction is a FIXED Talon action (the `mcp` step in its workflow), decided when you author it — no model at run time. Some tasks instead need judgement WHEN they fire: "stock is trending down — which items are at risk, and should I reorder or just alert you?". For those, opt the agent into escalation with the `escalate` argument on create/update:
+
+  escalate: {"enabled":true}
+  # or, with options:
+  escalate: {"enabled":true,"prompt_template":"...","max_per_window":5,"window_seconds":3600}
+
+When an escalation-enabled watcher fires, instead of only running its fixed action the system starts a full assistant turn in the USER'S session, seeded with what tripped (the agent's description = the user's original ask, the fired on-block, and the latest observed facts). That turn can investigate — including fanning out focused sub-agent checks — decide, and then message the user to ask how to proceed. Its reply is pushed to the user's channel, tagged as agent-originated.
+
+Guidance:
+- Escalation is OPT-IN and costs tokens (it runs a real LLM turn), so use it only when the firing genuinely needs judgement or a question back to the user. For a deterministic fixed reaction, author a normal workflow action and leave escalate off.
+- Detection still stays deterministic: author the SAME `on change attr` + `poll`/`webhook` watcher. `escalate` only changes the REACTION. You still provide a talon_source; keep its workflow minimal (or a no-op notify) when the real work is the escalation turn.
+- It is rate-limited (max_per_window / window_seconds; 0 = server default) and edge-triggered (fires on the crossing, not every tick), so a persisting condition won't spam the user.
+- prompt_template optionally overrides the seed prompt; placeholders: {{agent_name}}, {{description}}, {{firings}}, {{facts}}.
+- Escalation needs an interactive session to address the turn to — author it from the user's chat (enabling it from a non-interactive context with no known session is rejected).
+
 RULES
 - The `when` threshold must be a literal number (you can't compare against another fact). Bake the user's number in.
 - The poll/webhook `attribute` MUST match the `attr` in your `on change attr "..."` block.

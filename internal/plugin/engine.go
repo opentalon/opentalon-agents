@@ -23,11 +23,17 @@ type Engine struct {
 	cfg   *config.Config
 	mgr   *agent.Manager
 	talon talonProxy
+	esc   escalator
 }
 
 // NewEngine builds the tick engine.
 func NewEngine(cfg *config.Config, mgr *agent.Manager) *Engine {
-	return &Engine{cfg: cfg, mgr: mgr, talon: talonProxy{pluginName: cfg.TalonPluginName}}
+	return &Engine{
+		cfg:   cfg,
+		mgr:   mgr,
+		talon: talonProxy{pluginName: cfg.TalonPluginName},
+		esc:   escalator{pluginName: cfg.EscalationPluginName},
+	}
 }
 
 // TickResult is a per-tick summary for logging/observability.
@@ -198,6 +204,7 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	}
 	if len(evalRes.Firings) > 0 {
 		e.recordRun(ctx, a, agent.TriggerWebhook, factsJSON, evalRes, now)
+		e.maybeEscalate(ctx, host, a, agent.TriggerWebhook, factsJSON, evalRes, now)
 	}
 	return len(evalRes.Firings), nil
 }
@@ -248,6 +255,7 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 
 	if len(evalRes.Firings) > 0 {
 		e.recordRun(ctx, a, agent.TriggerPoll, factsJSON, evalRes, now)
+		e.maybeEscalate(ctx, host, a, agent.TriggerPoll, factsJSON, evalRes, now)
 	}
 	return len(evalRes.Firings), nil
 }

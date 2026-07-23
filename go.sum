@@ -20,8 +20,8 @@ github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWE
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
-github.com/opentalon/opentalon v0.0.18 h1:fYy/zd0Y50NPPbjR60HT7wBGLcBJNtjifu+ED1QQYXA=
-github.com/opentalon/opentalon v0.0.18/go.mod h1:QgMdi55g3U1TmEkLfWj8qeWURF9f3TjsS8/g6U5PXzc=
+github.com/opentalon/opentalon v0.0.22 h1:KwtXbc7pyr1W1y3K0S900v8FBHVCoCGCTiCW5FwRF2s=
+github.com/opentalon/opentalon v0.0.22/go.mod h1:sonYFs/s2lubKoKoyuZZrhufgd+EwrEzXBEu1I9iCt8=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=

@@ -35,11 +35,11 @@ func TestOpen_MigratesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("first open: %v", err)
 	}
 	v, err := db.currentVersion()
-	if err != nil || v != 1 {
+	if err != nil || v != 2 {
 		t.Fatalf("version after migrate: %d, %v", v, err)
 	}
-	// All four tables should exist.
-	for _, table := range []string{"agents", "runs", "agent_state", "pending_events"} {
+	// All tables should exist.
+	for _, table := range []string{"agents", "runs", "agent_state", "pending_events", "agent_escalations"} {
 		if _, err := db.SQL().Exec("SELECT 1 FROM " + table + " WHERE 1=0"); err != nil {
 			t.Errorf("table %q missing: %v", table, err)
 		}
@@ -52,8 +52,8 @@ func TestOpen_MigratesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("second open: %v", err)
 	}
 	defer func() { _ = db2.Close() }()
-	if v, _ := db2.currentVersion(); v != 1 {
-		t.Errorf("version should stay 1 on reopen, got %d", v)
+	if v, _ := db2.currentVersion(); v != 2 {
+		t.Errorf("version should stay 2 on reopen, got %d", v)
 	}
 }
 
