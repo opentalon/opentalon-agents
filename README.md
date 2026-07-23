@@ -258,17 +258,17 @@ sequenceDiagram
   autonumber
   participant A as opentalon-agents
   participant O as orchestrator
-  participant E as _escalate (host)
+  participant E as _escalate host
   participant Sub as sub-agent checks
-  participant U as user's channel
+  participant U as user channel
 
-  Note over A: watcher fires (XYZ-9 crosses 20→6)<br/>escalate=true, within rate limit
-  A->>O: RunAction(_escalate.turn {session_id, prompt,<br/>entity_id, group_id, source:agent, agent_id, trigger:poll})
-  O->>E: start background turn (seed prompt hidden)
-  E->>Sub: investigate each at-risk SKU (lead time, open POs)
-  Sub-->>E: XYZ-9 at risk; ABC-123 covered
-  E-->>U: push reply (tagged source:agent) — "…reorder XYZ-9 now, or just alert?"
-  U->>O: "Reorder XYZ-9, 200 units."
+  Note over A: watcher fires, XYZ-9 crosses 20 to 6,<br/>escalate on and within rate limit
+  A->>O: RunAction _escalate.turn<br/>session_id, prompt, entity_id, group_id,<br/>source agent, agent_id, trigger poll
+  O->>E: start background turn, seed prompt hidden
+  E->>Sub: investigate each at-risk SKU, lead time and open POs
+  Sub-->>E: XYZ-9 at risk, ABC-123 covered
+  E-->>U: push reply tagged source agent, ask reorder XYZ-9 or just alert
+  U->>O: Reorder XYZ-9, 200 units
   O-->>U: next turn opens the PO
 ```
 
