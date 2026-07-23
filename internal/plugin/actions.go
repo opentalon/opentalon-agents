@@ -7,6 +7,11 @@ import pkg "github.com/opentalon/opentalon/pkg/plugin"
 // author.
 var injected = []string{"group_id", "entity_id"}
 
+// injectedWithSession additionally captures session_id — the caller's packed
+// session key — so create/update can record where an escalation turn should
+// run and push its reply. Other actions don't need it.
+var injectedWithSession = []string{"group_id", "entity_id", "session_id"}
+
 // actions returns the LLM-visible actions for the agents plugin.
 func actions() []pkg.ActionMsg {
 	source := pkg.ParameterMsg{
@@ -22,16 +27,22 @@ func actions() []pkg.ActionMsg {
 		Required:    false,
 	}
 	idParam := pkg.ParameterMsg{Name: "id", Description: "Agent id or name.", Type: "string", Required: true}
+	escalate := pkg.ParameterMsg{
+		Name:        "escalate",
+		Description: `Optional. Opt this agent into ESCALATION: when its watcher fires, instead of only running its fixed Talon action, start an assistant reasoning turn in the user's session that can investigate and ASK THE USER what to do. Detection stays deterministic; only the reaction is model-driven, and it costs tokens — so it is opt-in and rate-limited. JSON object: {"enabled":true,"prompt_template":"...","max_per_window":5,"window_seconds":3600} (or the shorthand "true"). prompt_template optionally overrides the seed prompt (placeholders: {{agent_name}} {{description}} {{firings}} {{facts}}); max_per_window/window_seconds cap the rate (0 = server default). Use for "watch X and when Y, figure out what's going on and check with me" — NOT for a fully-automated fixed action.`,
+		Type:        "string",
+		Required:    false,
+	}
 
 	return []pkg.ActionMsg{
 		{
 			Name:              "create",
 			Description:       "Create a persistent agent from a Talon program. The source is validated before storing.",
-			InjectContextArgs: injected,
+			InjectContextArgs: injectedWithSession,
 			Parameters: []pkg.ParameterMsg{
 				{Name: "name", Description: "Short unique name for the agent (within your group).", Type: "string", Required: true},
 				{Name: "description", Description: "The user's request in their own words — what they asked this agent to do. Store the original ask verbatim (lightly cleaned up), not your paraphrase of the Talon.", Type: "string", Required: true},
-				source, triggers,
+				source, triggers, escalate,
 			},
 		},
 		{
@@ -55,9 +66,9 @@ func actions() []pkg.ActionMsg {
 		},
 		{
 			Name:              "update",
-			Description:       "Replace an agent's Talon source (and optionally its triggers). The new source is validated before storing.",
-			InjectContextArgs: injected,
-			Parameters:        []pkg.ParameterMsg{idParam, source, triggers},
+			Description:       "Replace an agent's Talon source (and optionally its triggers, and its escalation setting). The new source is validated before storing.",
+			InjectContextArgs: injectedWithSession,
+			Parameters:        []pkg.ParameterMsg{idParam, source, triggers, escalate},
 		},
 		{
 			Name:              "enable",

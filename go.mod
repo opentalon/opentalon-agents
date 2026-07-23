@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
-	github.com/opentalon/opentalon v0.0.18
+	github.com/opentalon/opentalon v0.0.22
 	github.com/robfig/cron/v3 v3.0.1
 	modernc.org/sqlite v1.46.1
 )

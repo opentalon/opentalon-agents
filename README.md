@@ -175,10 +175,10 @@ Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` does
 
 | Action | Description |
 |--------|-------------|
-| `create` | Author an agent from Talon source (+ optional triggers). Validated via `talon-plugin.check` before storing. |
-| `list` / `show` | Inspect agents (`show` returns the full Talon source). |
+| `create` | Author an agent from Talon source (+ optional triggers, + optional `escalate`). Validated via `talon-plugin.check` before storing. |
+| `list` / `show` | Inspect agents (`show` returns the full Talon source, and the escalation config when enabled). |
 | `run` | Execute an agent's program now (inline) and return the result. _shipped_ |
-| `update` | Replace the Talon source / triggers (re-validated). |
+| `update` | Replace the Talon source / triggers / escalation setting (re-validated). |
 | `enable` / `disable` / `delete` | Lifecycle. |
 | `tick` | Hidden (`UserOnly`) — fired by the host scheduler to drive watchers (poll → map → evaluate). _implemented_ |
 
@@ -192,6 +192,7 @@ Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` does
 - **Phase 2 — _in progress_**: the watcher/tick engine. Tracked in [#1](https://github.com/opentalon/opentalon-agents/issues/1): poll trigger + state ([#3](https://github.com/opentalon/opentalon-agents/issues/3), [#4](https://github.com/opentalon/opentalon-agents/issues/4)), `talonproxy.Evaluate` ([#5](https://github.com/opentalon/opentalon-agents/issues/5)), poller/mapper/engine ([#6](https://github.com/opentalon/opentalon-agents/issues/6)–[#8](https://github.com/opentalon/opentalon-agents/issues/8)), tick + scheduler wiring ([#9](https://github.com/opentalon/opentalon-agents/issues/9)), prompt + E2E ([#10](https://github.com/opentalon/opentalon-agents/issues/10), [#11](https://github.com/opentalon/opentalon-agents/issues/11)). Depends on `talon-plugin`'s `evaluate` action (**done**, `v0.2.0`).
 - **Phase 3 — webhook triggers _implemented_**: push data instead of polling. Declare a `webhook` trigger (mapping only), set `expose_http: true` + a `webhook_secret`, and POST to the endpoint below. The handler enqueues into `pending_events`; the next tick drains and evaluates it (the HTTP request has no `HostCaller`, so evaluation is deferred to the tick).
 - **Phase 4 — _implemented_** ([#13](https://github.com/opentalon/opentalon-agents/issues/13)): **`schedule` (cron) triggers** (one-shot `workflow` agent on a 5-field cron, tracked via `next_cron_at`, run through `execute_workflow`); **create-time trigger validation**; **multi-entity polls** — a poll trigger with `items_path` maps every element of a list to a fact (value_path/id_field per item), capped by `max_items_per_poll` (drops are logged, never silent); and a **configurable backoff cap** (`max_backoff_seconds`, default 30m).
+- **Phase 5 — escalation & sub-agent mode _implemented_** ([#30](https://github.com/opentalon/opentalon-agents/issues/30)): a **hybrid** reaction. Detection stays deterministic (the tick), but an agent can opt into `escalate` so that when its watcher fires, instead of only running a fixed Talon action, the plugin starts a full assistant **reasoning turn** in the creator's session (via the host's built-in `_escalate` entrypoint — requires `opentalon` ≥ `v0.0.22` with `orchestrator.escalation.enabled`). That turn can investigate (including fanning out sub-agent checks), decide, and **ask the user** what to do; its reply is pushed back to the user's channel tagged as agent-originated (`source: agent`, `agent_id`, `trigger`). Opt-in per agent, edge-triggered, and rate-limited (`escalation_max_per_window` / `escalation_window_seconds`, per-agent overridable).
 
 ## Durability & restart
 

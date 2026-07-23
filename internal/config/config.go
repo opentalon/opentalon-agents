@@ -36,6 +36,21 @@ type Config struct {
 	// endpoint entirely — we refuse to serve an unauthenticated ingress.
 	WebhookSecret string `json:"webhook_secret"`
 
+	// EscalationPluginName is the host's built-in escalation entrypoint the
+	// engine calls when an escalation-enabled watcher fires. Defaults to
+	// "_escalate" (the reserved built-in in opentalon). The host must have
+	// escalation enabled (orchestrator.escalation.enabled) for the call to do
+	// anything; otherwise it returns {escalated:false} and the engine logs and
+	// moves on.
+	EscalationPluginName string `json:"escalation_plugin_name"`
+
+	// EscalationMaxPerWindow / EscalationWindowSeconds are the default rate
+	// limit applied to an escalating agent that doesn't set its own. Defaults:
+	// 5 escalations per 3600s (1h). A per-agent override (EscalationSpec)
+	// takes precedence.
+	EscalationMaxPerWindow  int `json:"escalation_max_per_window"`
+	EscalationWindowSeconds int `json:"escalation_window_seconds"`
+
 	// DefaultGroupID is a local-development fallback for the group scope
 	// when the host injects no group_id. Prod dispatches (operator /
 	// control-plane) always stamp a real group_id in the call args, so
@@ -78,6 +93,15 @@ func Parse(jsonStr string) (*Config, error) {
 	}
 	if cfg.MaxBackoffSeconds == 0 {
 		cfg.MaxBackoffSeconds = 1800
+	}
+	if cfg.EscalationPluginName == "" {
+		cfg.EscalationPluginName = "_escalate"
+	}
+	if cfg.EscalationMaxPerWindow == 0 {
+		cfg.EscalationMaxPerWindow = 5
+	}
+	if cfg.EscalationWindowSeconds == 0 {
+		cfg.EscalationWindowSeconds = 3600
 	}
 	return cfg, nil
 }

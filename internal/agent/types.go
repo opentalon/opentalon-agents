@@ -158,10 +158,12 @@ const (
 )
 
 // RunContext carries the caller identity the host injects into each
-// action call.
+// action call. SessionID is the caller's packed session key, captured on
+// create/update so an escalation turn can be addressed back to it.
 type RunContext struct {
-	GroupID  string
-	EntityID string
+	GroupID   string
+	EntityID  string
+	SessionID string
 }
 
 // AgentSummary is the list-view of an agent — everything but the full
