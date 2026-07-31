@@ -74,10 +74,27 @@ Guidance:
 - prompt_template optionally overrides the seed prompt; placeholders: {{agent_name}}, {{description}}, {{firings}}, {{facts}}.
 - Escalation needs an interactive session to address the turn to — author it from the user's chat (enabling it from a non-interactive context with no known session is rejected).
 
+NOTIFYING THE USER ("tell me when...")
+Most "monitor X and LET ME KNOW" requests want a plain message pushed back to the user — not a ticket, not an LLM turn. Use the `notify` argument on create/update:
+
+  notify: true
+  # or, with a custom message:
+  notify: {"enabled":true,"template":"{{agent_name}}: stock crossed the line — {{facts}}"}
+
+When a notify-enabled agent fires (or, for a `schedule` agent, after each run) the system pushes the message to the conversation the agent was created in. The destination — channel, chat, session — is captured automatically from the create call and stored with the agent.
+
+NEVER hardcode a chat/channel/user id and NEVER author an `mcp "<channel>" "send"` step to message the user: you do not know the user's address, and a baked-in one breaks the moment they use a different channel. `notify` is the only correct way for an agent to reach the user.
+
+- notify vs escalate: `notify` PUSHES a fixed message (free, deterministic, no model). `escalate` starts a real assistant TURN that investigates and can ask a question (costs tokens, rate-limited). "Tell me when stock drops" → notify. "Work out what's going on and check with me" → escalate. They are independent; an agent may use both, but don't set escalate when a plain message is what was asked for.
+- template placeholders: {{agent_name}}, {{description}}, {{firings}}, {{facts}}, {{result}} (schedule runs), {{error}} (failed runs), {{trigger}}. Leave template unset for a sensible default message.
+- A notify-only watcher still needs a valid talon_source — the `on change attr` block is what detects the crossing. Its workflow can be empty/minimal when the message IS the action.
+- Notification needs a conversation to deliver to — author it from the user's chat (enabling it from a non-interactive context with no known conversation is rejected).
+
 RULES
 - The `when` threshold must be a literal number (you can't compare against another fact). Bake the user's number in.
 - The poll/webhook `attribute` MUST match the `attr` in your `on change attr "..."` block.
 - `schedule` cron is 5-field, minute granularity. There is NO seconds field — a 6-field cron is invalid and will be rejected. For anything faster than a minute, use a `poll` trigger with a sub-minute `interval` ("30s").
 - Keep one clear task per agent.
+- To message the user, use `notify` — never a hardcoded chat id or a channel `mcp` send step.
 - Do NOT put the polling MCP call inside talon_source and do NOT emit a `pipeline`. A watcher is always create(talon_source = `on change attr` + workflow, triggers = a `poll` entry). The workflow's `mcp` step is the fire action only.
 - Validate by create (invalid Talon is rejected with diagnostics) or by run(id).

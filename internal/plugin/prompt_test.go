@@ -20,6 +20,8 @@ func TestPromptCoversWatcherAuthoring(t *testing.T) {
 		"6-field cron is invalid", // steer away from seconds-cron toward poll interval
 		"does the FETCHING",       // poll fetches; don't fetch inside talon_source
 		"never a `pipeline`",      // steer away from free-form pipeline output
+		"notify: true",            // the push-a-message opt-in
+		"NEVER hardcode a chat",   // the address must never be baked into Talon
 	}
 	for _, s := range must {
 		if !strings.Contains(promptText, s) {

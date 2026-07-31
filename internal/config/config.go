@@ -51,6 +51,13 @@ type Config struct {
 	EscalationMaxPerWindow  int `json:"escalation_max_per_window"`
 	EscalationWindowSeconds int `json:"escalation_window_seconds"`
 
+	// NotifyPluginName is the host entrypoint the engine calls to PUSH a
+	// message to an agent creator's conversation. Defaults to "_notify". The
+	// host must expose it (a generic "send this text to this session /
+	// channel+conversation" action); when it doesn't, the call fails and the
+	// engine logs and moves on — the agent's own run is unaffected.
+	NotifyPluginName string `json:"notify_plugin_name"`
+
 	// DefaultGroupID is a local-development fallback for the group scope
 	// when the host injects no group_id. Prod dispatches (operator /
 	// control-plane) always stamp a real group_id in the call args, so
@@ -96,6 +103,9 @@ func Parse(jsonStr string) (*Config, error) {
 	}
 	if cfg.EscalationPluginName == "" {
 		cfg.EscalationPluginName = "_escalate"
+	}
+	if cfg.NotifyPluginName == "" {
+		cfg.NotifyPluginName = "_notify"
 	}
 	if cfg.EscalationMaxPerWindow == 0 {
 		cfg.EscalationMaxPerWindow = 5

@@ -7,10 +7,14 @@ import pkg "github.com/opentalon/opentalon/pkg/plugin"
 // author.
 var injected = []string{"group_id", "entity_id"}
 
-// injectedWithSession additionally captures session_id — the caller's packed
-// session key — so create/update can record where an escalation turn should
-// run and push its reply. Other actions don't need it.
-var injectedWithSession = []string{"group_id", "entity_id", "session_id"}
+// injectedWithSession additionally captures the caller's DELIVERY CONTEXT so
+// create/update can record where to reach the creator later: session_id (the
+// packed session key an escalation turn runs in), plus the explicit
+// channel_id / conversation_id / sender_id a notification is addressed to.
+// All are best-effort — the host injects only the ones it can resolve, and
+// skips empty values — so the plugin must not assume any single one is set.
+// Other actions don't need them.
+var injectedWithSession = []string{"group_id", "entity_id", "session_id", "channel_id", "conversation_id", "sender_id"}
 
 // actions returns the LLM-visible actions for the agents plugin.
 func actions() []pkg.ActionMsg {
@@ -34,6 +38,13 @@ func actions() []pkg.ActionMsg {
 		Required:    false,
 	}
 
+	notify := pkg.ParameterMsg{
+		Name:        "notify",
+		Description: `Optional. Opt this agent into NOTIFYING the user: when it fires (or, for a schedule agent, after each run) the system PUSHES a message to the conversation the agent was created in. Use this for "tell me / let me know / ping me when X" — do NOT hardcode a chat id or author an mcp send step for it; the destination is captured automatically and the LLM never sees it. Costs no tokens and starts no assistant turn (that is ` + "`escalate`" + `). JSON object: {"enabled":true,"template":"..."} (or the shorthand "true"). template optionally overrides the message text (placeholders: {{agent_name}} {{description}} {{firings}} {{facts}} {{result}} {{error}} {{trigger}}).`,
+		Type:        "string",
+		Required:    false,
+	}
+
 	return []pkg.ActionMsg{
 		{
 			Name:              "create",
@@ -42,7 +53,7 @@ func actions() []pkg.ActionMsg {
 			Parameters: []pkg.ParameterMsg{
 				{Name: "name", Description: "Short unique name for the agent (within your group).", Type: "string", Required: true},
 				{Name: "description", Description: "The user's request in their own words — what they asked this agent to do. Store the original ask verbatim (lightly cleaned up), not your paraphrase of the Talon.", Type: "string", Required: true},
-				source, triggers, escalate,
+				source, triggers, escalate, notify,
 			},
 		},
 		{
@@ -66,9 +77,9 @@ func actions() []pkg.ActionMsg {
 		},
 		{
 			Name:              "update",
-			Description:       "Replace an agent's Talon source (and optionally its triggers, and its escalation setting). The new source is validated before storing.",
+			Description:       "Replace an agent's Talon source (and optionally its triggers, its escalation setting, and its notification setting). The new source is validated before storing.",
 			InjectContextArgs: injectedWithSession,
-			Parameters:        []pkg.ParameterMsg{idParam, source, triggers, escalate},
+			Parameters:        []pkg.ParameterMsg{idParam, source, triggers, escalate, notify},
 		},
 		{
 			Name:              "enable",

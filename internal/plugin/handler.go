@@ -81,6 +81,10 @@ func (h *Handler) Configure(configJSON string) error {
 	}
 	*h.cfg = *parsed
 	h.talon = talonProxy{pluginName: h.cfg.TalonPluginName}
+	// The engine caches the plugin names it calls out to (talon, escalation,
+	// notify) in its proxies, so it has to be rebuilt for a configured name to
+	// take effect. It keeps no in-memory state — everything is in the DB.
+	h.engine = NewEngine(h.cfg, h.mgr)
 	slog.Info("opentalon-agents: configured", "talon_plugin", h.cfg.TalonPluginName, "db_driver", h.cfg.DB.Driver, "default_group_id", h.cfg.DefaultGroupID)
 	return nil
 }
@@ -106,7 +110,14 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 	if groupID == "" {
 		return errResp(req.ID, "missing group_id (should be injected by the host)")
 	}
-	rc := agent.RunContext{GroupID: groupID, EntityID: req.Args["entity_id"], SessionID: req.Args["session_id"]}
+	rc := agent.RunContext{
+		GroupID:        groupID,
+		EntityID:       req.Args["entity_id"],
+		SessionID:      req.Args["session_id"],
+		ChannelID:      req.Args["channel_id"],
+		ConversationID: req.Args["conversation_id"],
+		SenderID:       req.Args["sender_id"],
+	}
 
 	switch req.Action {
 	case "create":
@@ -161,6 +172,10 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	nspec, err := agent.ParseNotifySpec(req.Args["notify"])
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
@@ -177,6 +192,9 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 		return errResp(req.ID, err.Error())
 	}
 	if resp, bad := h.saveEscalation(ctx, req.ID, a.ID, rc, spec); bad {
+		return resp
+	}
+	if resp, bad := h.saveNotification(ctx, req.ID, a.ID, rc, nspec); bad {
 		return resp
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Created agent %q (id %s).", a.Name, a.ID), summarize(a))
@@ -209,6 +227,14 @@ func (h *Handler) actionShow(ctx context.Context, req pkg.Request, rc agent.RunC
 			"prompt_template": esc.PromptTemplate,
 			"max_per_window":  esc.MaxPerWindow,
 			"window_seconds":  esc.WindowSeconds,
+		}
+	}
+	if n, found, err := h.mgr.GetNotification(ctx, a.ID); err == nil && found && n.Enabled {
+		// The target itself is deliberately NOT echoed: the LLM must not learn
+		// (and then hardcode) a chat address.
+		view["notification"] = map[string]any{
+			"enabled":  n.Enabled,
+			"template": n.Template,
 		}
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Agent %q (id %s).", a.Name, a.ID), view)
@@ -265,6 +291,10 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	nspec, err := agent.ParseNotifySpec(req.Args["notify"])
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
@@ -273,6 +303,9 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 		return errResp(req.ID, err.Error())
 	}
 	if resp, bad := h.saveEscalation(ctx, req.ID, a.ID, rc, spec); bad {
+		return resp
+	}
+	if resp, bad := h.saveNotification(ctx, req.ID, a.ID, rc, nspec); bad {
 		return resp
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Updated agent %q (id %s).", a.Name, a.ID), summarize(a))
@@ -316,6 +349,31 @@ func (h *Handler) saveEscalation(ctx context.Context, callID, agentID string, rc
 		}
 	}
 	if err := h.mgr.SaveEscalation(ctx, agentID, rc.SessionID, *spec); err != nil {
+		return errResp(callID, err.Error()), true
+	}
+	return pkg.Response{}, false
+}
+
+// saveNotification persists the agent's notification config and the delivery
+// target from the call context when the author supplied one (spec != nil); a
+// nil spec leaves any existing config untouched. Opting in requires somewhere
+// to deliver to: reject enable when neither this call nor a previously stored
+// row carries an addressable target.
+func (h *Handler) saveNotification(ctx context.Context, callID, agentID string, rc agent.RunContext, spec *agent.NotifySpec) (pkg.Response, bool) {
+	if spec == nil {
+		return pkg.Response{}, false
+	}
+	target := rc.Delivery()
+	if spec.Enabled && !target.Addressable() {
+		existing, found, err := h.mgr.GetNotification(ctx, agentID)
+		if err != nil {
+			return errResp(callID, err.Error()), true
+		}
+		if !found || !existing.Target.Addressable() {
+			return errResp(callID, "notify.enabled needs a conversation to deliver to, but none is available here"), true
+		}
+	}
+	if err := h.mgr.SaveNotification(ctx, agentID, target, *spec); err != nil {
 		return errResp(callID, err.Error()), true
 	}
 	return pkg.Response{}, false

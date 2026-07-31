@@ -160,10 +160,26 @@ const (
 // RunContext carries the caller identity the host injects into each
 // action call. SessionID is the caller's packed session key, captured on
 // create/update so an escalation turn can be addressed back to it.
+// ChannelID/ConversationID/SenderID are the creator's delivery context,
+// captured on the same calls so a notification can be pushed at fire time
+// without querying the originating session.
 type RunContext struct {
-	GroupID   string
-	EntityID  string
-	SessionID string
+	GroupID        string
+	EntityID       string
+	SessionID      string
+	ChannelID      string
+	ConversationID string
+	SenderID       string
+}
+
+// Delivery returns the creator's delivery target from the run context.
+func (rc RunContext) Delivery() DeliveryTarget {
+	return DeliveryTarget{
+		SessionID:      rc.SessionID,
+		ChannelID:      rc.ChannelID,
+		ConversationID: rc.ConversationID,
+		SenderID:       rc.SenderID,
+	}
 }
 
 // AgentSummary is the list-view of an agent — everything but the full
