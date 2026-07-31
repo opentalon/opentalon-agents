@@ -1,98 +1,49 @@
 {
-  "recorded_at": "2026-07-21T15:18:53.429628762Z",
+  "recorded_at": "2026-07-31T18:25:23.758016223Z",
   "interactions": [
     {
-      "request_sha256": "3dcee5064feb569001adc6d9bb46136be7746e09218f155dad056d7f1432c20c",
+      "request_sha256": "d2c179d29e65fab12e50ca287a60ef66aee97bcc59d52adb6af6cbbc3c2bf4bd",
       "status": 200,
       "response": {
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_011CdFRhGH9rT17vDqiVZirt",
+        "id": "msg_011Cdac1VvvytB4kpvS5aAyi",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "```json\n{\n  \"type\": \"pipeline\",\n  \"steps\": [\n    {\n      \"id\": \"create_agent\",\n      \"name\": \"Create stock-abc agent with polling trigger\",\n      \"plugin\": \"agents\",\n      \"action\": \"create\",\n      \"args\": {\n        \"name\": \"stock-abc\",\n        \"description\": \"Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10\",\n        \"talon_source\": \"workflow \\\"check_stock\\\" {\\n  step \\\"get_item\\\" {\\n    mcp \\\"testdb\\\" action=\\\"testdb__get_item\\\" barcode=\\\"ABC-123\\\"\\n  }\\n  step \\\"create_ticket\\\" {\\n    when current_stock < 10\\n    mcp \\\"testdb\\\" action=\\\"testdb__create_ticket\\\" barcode=\\\"ABC-123\\\" qty=50\\n  }\\n}\\n\\non fact current_stock < 10 {\\n  workflow \\\"check_stock\\\" {}\\n}\",\n        \"triggers\": [\n          {\n            \"type\": \"schedule\",\n            \"interval\": \"10s\"\n          }\n        ]\n      },\n      \"depends_on\": []\n    }\n  ]\n}\n```"
+            "text": "```json\n{\n  \"type\": \"pipeline\",\n  \"steps\": [\n    {\n      \"id\": \"create_agent\",\n      \"name\": \"Create stock-abc agent with schedule trigger and notification\",\n      \"plugin\": \"agents\",\n      \"action\": \"create\",\n      \"args\": {\n        \"name\": \"stock-abc\",\n        \"description\": \"Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10\",\n        \"talon_source\": \"workflow \\\"check_stock\\\" {\\n  step \\\"get_item\\\" {\\n    mcp \\\"testdb\\\" action=\\\"testdb__get_item\\\" barcode=\\\"ABC-123\\\"\\n  }\\n  \\n  on \\\"stock_low\\\" {\\n    when current_stock < 10\\n    workflow \\\"refill\\\" {\\n      step \\\"create_ticket\\\" {\\n        mcp \\\"testdb\\\" action=\\\"testdb__create_ticket\\\" barcode=\\\"ABC-123\\\" qty=50\\n      }\\n    }\\n  }\\n}\\n\\nstore {\\n  current_stock = get_item.current_stock\\n  barcode = get_item.barcode\\n  name = get_item.name\\n}\\n\\non \\\"stock_low\\\" when current_stock < 10 {}\",\n        \"triggers\": [\n          {\n            \"type\": \"schedule\",\n            \"interval\": \"10s\"\n          }\n        ],\n        \"notify\": true,\n        \"escalate\": false\n      },\n      \"depends_on\": []\n    }\n  ]\n}\n```\n\nI've created the **stock-abc** agent with the following configuration:\n\n- **Polling**: Checks inventory item ABC-123 every 10 seconds using the testdb MCP server\n- **Trigger**: When `current_stock` drops below 10, it automatically opens a refill ticket for 50 units\n- **Notification**: Enabled (`notify: true`), so you'll see a message in chat when the agent fires and creates a ticket\n- **Talon Source**: The agent evaluates the flat response object directly (barcode, name, current_stock at top level) and fires an `on \"stock_low\"` block when the stock condition is met\n\nThe agent is now active and will monitor your inventory continuously. You'll receive a notification in chat whenever the refill ticket is created due to low stock."
           }
         ],
         "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 2656,
+          "input_tokens": 2800,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 301,
+          "output_tokens": 564,
           "service_tier": "standard",
           "inference_geo": "not_available"
         }
       }
     },
     {
-      "request_sha256": "0e03d6c6d18e19ae5bf24b047953bb5ae8c34bca22c7fa663ee3afcdeccb54be",
+      "request_sha256": "92cc8624846cc422b5b94e9faec7ff20c1d09640a57ead611a01e4f9436f823f",
       "status": 200,
       "response": {
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_011CdFRhTsR3Ay7r9QHMoUat",
+        "id": "msg_011Cdac1ptT5m1CyuUY61BuX",
         "type": "message",
         "role": "assistant",
         "content": [
           {
-            "type": "text",
-            "text": "I'll create an agent that monitors the stock level for item ABC-123 and automatically opens a refill ticket when it drops below 10 units."
-          },
-          {
             "type": "tool_use",
-            "id": "toolu_01PtPdeu2HSJWo4fCPKUzVTk",
-            "name": "agents__create",
-            "input": {
-              "name": "stock-abc",
-              "description": "Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10",
-              "talon_source": "on change attr \"current_stock\" {\n  when prev_value >= 10 and new_value < 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
-              "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]"
-            },
-            "caller": {
-              "type": "direct"
-            }
-          }
-        ],
-        "stop_reason": "tool_use",
-        "stop_sequence": null,
-        "stop_details": null,
-        "usage": {
-          "input_tokens": 5625,
-          "cache_creation_input_tokens": 0,
-          "cache_read_input_tokens": 0,
-          "cache_creation": {
-            "ephemeral_5m_input_tokens": 0,
-            "ephemeral_1h_input_tokens": 0
-          },
-          "output_tokens": 322,
-          "service_tier": "standard",
-          "inference_geo": "not_available"
-        }
-      }
-    },
-    {
-      "request_sha256": "d6347e95163adaa463202031253be09f81cced942ae5d121c562968f21cc5063",
-      "status": 200,
-      "response": {
-        "model": "claude-haiku-4-5-20251001",
-        "id": "msg_011CdFRhkNMEVybuqqJigZ2t",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-          {
-            "type": "text",
-            "text": "Let me load the agent tool first:"
-          },
-          {
-            "type": "tool_use",
-            "id": "toolu_016boTjEKNMYdycCR1PCF1rW",
+            "id": "toolu_01L8oB7Jzd2UkLs3XRSESMhZ",
             "name": "_meta__load_tools",
             "input": {
               "names": "agents__create"
@@ -106,41 +57,42 @@
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 6048,
+          "input_tokens": 6677,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 67,
+          "output_tokens": 59,
           "service_tier": "standard",
           "inference_geo": "not_available"
         }
       }
     },
     {
-      "request_sha256": "2c59483ffc52d838d24c4cca793f227cbe8edf3c13a7aa4fa539d361f6678309",
+      "request_sha256": "47dcbf36f40effc59f1147daeb7caa7b57cbb6f739b7c5c7297e334503010a72",
       "status": 200,
       "response": {
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_011CdFRhrsGvq1a6NFxjpbEt",
+        "id": "msg_011Cdac1um8yMdiEdDLVDGYS",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "Now I'll create the agent:"
+            "text": "Now I'll create the agent with the watcher configuration:"
           },
           {
             "type": "tool_use",
-            "id": "toolu_01XUHog7gqb6KaN1vGPgUKhQ",
+            "id": "toolu_016FxDN45WDoJdnXUmUKWYpY",
             "name": "agents__create",
             "input": {
-              "description": "Watch inventory item ABC-123 and open a refill ticket for 50 units when stock drops below 10",
               "name": "stock-abc",
-              "talon_source": "on change attr \"current_stock\" {\n  when prev_value >= 10 and new_value < 10\n  workflow \"Refill ABC-123\"\n}\n\nworkflow \"Refill ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
-              "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]"
+              "description": "Watch inventory item barcode ABC-123 and open a refill ticket for 50 units when its stock drops below 10. Also notify me in chat when it fires.",
+              "talon_source": "on change attr \"current_stock\" {\n  when prev_value >= 10 and new_value < 10\n  workflow \"Refill low stock ABC-123\"\n}\n\nworkflow \"Refill low stock ABC-123\" {\n  step \"create_ticket\" {\n    mcp \"testdb\" \"testdb__create_ticket\" {\n      barcode \"ABC-123\"\n      qty 50\n    }\n  }\n}",
+              "triggers": "[{\"type\":\"poll\",\"config\":{\"server\":\"testdb\",\"tool\":\"testdb__get_item\",\"args\":{\"barcode\":\"ABC-123\"},\"interval\":\"10s\",\"value_path\":\"current_stock\",\"id_field\":\"barcode\",\"attribute\":\"current_stock\"}}]",
+              "notify": "true"
             },
             "caller": {
               "type": "direct"
@@ -151,81 +103,81 @@
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 6413,
+          "input_tokens": 7565,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 297,
+          "output_tokens": 335,
           "service_tier": "standard",
           "inference_geo": "not_available"
         }
       }
     },
     {
-      "request_sha256": "195be377e254805e34f98caf0dc8ba7060448953bb7042feea9a9c9924330463",
+      "request_sha256": "f38692c97d163e2b89082e457a81f8d11fa41ad4e9e043199232fd9bd1f448d5",
       "status": 200,
       "response": {
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_011CdFRi3MYzhRLgbW4zXnzh",
+        "id": "msg_011Cdac294LyZEQRUs6gBDGn",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "Perfect! I've created the agent **stock-abc**. It will:\n\n- **Poll** the testdb server every 10 seconds to fetch the current stock level for item ABC-123\n- **Monitor** the `current_stock` attribute and watch for when it crosses from ≥10 to <10\n- **Fire once** on that transition and create a refill ticket for 50 units\n\nThe agent is enabled and ready to run. When stock drops below 10, it will automatically open a refill ticket."
+            "text": "Done! I've created the agent **stock-abc**. Here's what it does:\n\n- **Watches** the `current_stock` of barcode ABC-123 every 10 seconds\n- **Fires** when stock crosses from ≥10 down to <10\n- **Action**: Creates a refill ticket for 50 units using `testdb__create_ticket`\n- **Notification**: Pushes a message back to this channel when it fires\n\nThe polling is configured to extract `current_stock` directly from the top-level response (no nested `item` object), and uses `barcode` as the entity ID so it tracks this specific item. The agent is enabled and ready to run."
           }
         ],
         "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 6862,
+          "input_tokens": 8065,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 117,
+          "output_tokens": 160,
           "service_tier": "standard",
           "inference_geo": "not_available"
         }
       }
     },
     {
-      "request_sha256": "f1efa5c8bf9fae36e4da7c68d1d12a0bf9ede544cebd6e017c068a25bb1821b0",
+      "request_sha256": "13c8fdb352e483d7b4a54d9cf218284d748d9da7dfc136c35287baa77133fa04",
       "status": 200,
       "response": {
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_011CdFRiDp75CMVeqZtqbUdH",
+        "id": "msg_011Cdac2JojEsray9yJA2EPz",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "text",
-            "text": "Create inventory monitoring agent for ABC-123"
+            "text": "Stock monitoring agent setup ABC-123"
           }
         ],
         "stop_reason": "end_turn",
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 256,
+          "input_tokens": 284,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 11,
+          "output_tokens": 10,
           "service_tier": "standard",
           "inference_geo": "not_available"
         }
       }
     }
   ],
-  "prompt_hash": "4b1f471a37bc0e52dc122e1c58dc9420197a481ee81270aca2bc4d4115241489"
+  "prompt_hash": "c5047f97bc3fbd9518950a982520bc71ab6c5231faf50ac1a543114749b0cc3c"
 }
