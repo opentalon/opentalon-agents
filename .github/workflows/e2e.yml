@@ -2,14 +2,17 @@ name: E2E
 
 # Full-stack end-to-end: builds the agents plugin, stands up Postgres +
 # datalevin + the testharness MCP server, runs the published opentalon host
-# container, and asserts the stock watcher fires exactly one refill ticket.
+# container, and asserts the stock watcher fires exactly one refill ticket and
+# pushes exactly one notification to the creator's conversation (#28).
 #
 # Four jobs:
 #   cassette-check (PR gate)        fast, no stack: fails if the committed
 #                                   cassette's prompt_hash != the current
 #                                   prompt.txt hash — i.e. the prompt changed but
 #                                   the cassette wasn't re-recorded.
-#   deterministic  (PR gate)        pre-seeds the agent, no LLM — fast + reliable.
+#   deterministic  (PR gate)        pre-seeds the agent (including a notification
+#                                   opt-in with a sentinel template), no LLM —
+#                                   fast + reliable.
 #   vcr-replay     (PR, label-gated) real authoring leg, served from a committed
 #                                   cassette via the vcr-proxy — deterministic,
 #                                   no secret. Proves chat -> LLM -> Talon agent.
@@ -250,6 +253,7 @@ jobs:
             ABC-123 and opens a refill ticket for 50 units when its stock drops
             below 10. Poll the mcp server tool testdb__get_item with arg
             barcode=ABC-123 every 10 seconds; the stock value is at current_stock.
+            Also tell me in chat when it fires.
         run: bash testharness/ci/run-e2e.sh
 
   vcr-record:
@@ -345,6 +349,7 @@ jobs:
             ABC-123 and opens a refill ticket for 50 units when its stock drops
             below 10. Poll the mcp server tool testdb__get_item with arg
             barcode=ABC-123 every 10 seconds; the stock value is at current_stock.
+            Also tell me in chat when it fires.
         run: bash testharness/ci/run-e2e.sh
 
       - name: Stamp current prompt_hash into cassette

@@ -20,6 +20,9 @@
 #   MCP_LOG        path to the testharness MCP server's log file
 #   DATALEVIN_LOG  path to datalevin-server's log file
 #   BARCODE        watched barcode (default ABC-123)
+#   NOTIFY_MARKER  deterministic mode: sentinel the seeded notification template
+#                  emits; grepped in the console channel's output (default
+#                  E2E-NOTIFY)
 #   PROMPT         authoring modes: the prompt piped to console stdin
 #   VCR_CASSETTE   cassette path (default testharness/ci/cassette.json)
 #   ANTHROPIC_API_KEY  vcr-record only: real key for the proxy's upstream
@@ -31,6 +34,7 @@ FIFO=""
 PROXY_PID=""
 CASSETTE="${VCR_CASSETTE:-testharness/ci/cassette.json}"
 PROXY_LOG="${PROXY_LOG:-/tmp/vcr-proxy.log}"
+NOTIFY_MARKER="${NOTIFY_MARKER:-E2E-NOTIFY}"
 
 # authoring: every mode except deterministic drives the LLM to author the agent.
 AUTHOR=1
@@ -67,6 +71,12 @@ psql_q() { psql "$DATABASE_URL" -tAc "$1"; }
 # stray ticket can't masquerade as a passing authoring leg.
 AGENTS_DB="${WORK}/agents.db"
 agents_q() { sqlite3 "$AGENTS_DB" "$1"; }
+
+# notify_hits counts how many times the pushed notification reached the console
+# channel. The console channel writes outbound content to its own stderr, which
+# the host inherits (internal/channel/connector.go: cmd.Stderr = os.Stderr), so
+# it lands in the container's log.
+notify_hits() { docker logs "$CONTAINER" 2>&1 | grep -cF "$NOTIFY_MARKER" || true; }
 
 # start_proxy launches the Anthropic record/replay proxy on :8788 for the vcr
 # modes. The host container reaches it via base_url=http://localhost:8788 (set
@@ -181,12 +191,70 @@ acount="$(agents_q "SELECT count(*) FROM agents WHERE name = 'stock-abc'")"
 [ "${acount:-0}" -ge 1 ] || { echo "FAIL: expected a stock-abc agent row, got ${acount:-0}"; exit 1; }
 echo "agents(stock-abc)=$acount"
 
+# Issue #28: the same firing must also PUSH a message to the creator's
+# conversation, via the host's _notify entrypoint — no address baked into the
+# Talon source.
+#
+# Deterministic mode seeds the notification with a sentinel template, so the
+# message text itself is asserted (delivered AND rendered with the observed
+# facts). Authoring modes leave the wording to the model, so there the assertion
+# is that the plugin stored an ENABLED notification with a delivery target the
+# host injected — the part #28 is actually about, and the part a seed can't fake.
+if [ "$AUTHOR" = "0" ]; then
+  echo "== waiting for the notification to reach the console channel =="
+  waited=0
+  until [ "$(notify_hits)" -ge 1 ]; do
+    sleep 3; waited=$((waited+3))
+    if [ "$waited" -ge 90 ]; then
+      echo "FAIL: no notification containing '$NOTIFY_MARKER' after ${waited}s"
+      echo "  (is orchestrator.notify.enabled set, and does the host image have _notify?)"
+      exit 1
+    fi
+  done
+  line="$(docker logs "$CONTAINER" 2>&1 | grep -F "$NOTIFY_MARKER" | head -1)"
+  echo "notification: $line"
+  # Rendered, not just delivered: the template's {{agent_name}}/{{trigger}}/
+  # {{facts}} must have been substituted with the real firing values.
+  case "$line" in
+    *stock-abc*) ;;
+    *) echo "FAIL: notification did not render {{agent_name}}"; exit 1 ;;
+  esac
+  case "$line" in
+    *poll*) ;;
+    *) echo "FAIL: notification did not render {{trigger}} as poll"; exit 1 ;;
+  esac
+  case "$line" in
+    *current_stock*) ;;
+    *) echo "FAIL: notification did not carry the observed facts"; exit 1 ;;
+  esac
+  case "$line" in
+    *'{{'*) echo "FAIL: notification has unsubstituted placeholders"; exit 1 ;;
+  esac
+else
+  ncount="$(agents_q "SELECT count(*) FROM agent_notifications WHERE enabled = 1")"
+  [ "${ncount:-0}" -ge 1 ] || { echo "FAIL: expected the authored agent to opt into notify, got ${ncount:-0}"; exit 1; }
+  # A stored opt-in with no target would silently never deliver — that was the
+  # whole failure mode #28 set out to remove.
+  tcount="$(agents_q "SELECT count(*) FROM agent_notifications WHERE enabled = 1 AND (session_id != '' OR (channel_id != '' AND conversation_id != ''))")"
+  [ "${tcount:-0}" -ge 1 ] || { echo "FAIL: notification stored without a delivery target (host injected none)"; exit 1; }
+  echo "notify opt-in rows with a target: $tcount"
+fi
+
 # AC#4: the fire is a downward crossing, not a level. Let a few more ticks run
 # with the stock still at 8 and assert no second ticket is opened.
 echo "== waiting 30s to prove subsequent ticks don't re-fire =="
 sleep 30
 recount="$(psql_q 'SELECT count(*) FROM tickets')"
 [ "$recount" = "1" ] || { echo "FAIL: expected still 1 ticket after further ticks, got $recount"; exit 1; }
+
+# Same edge-trigger guarantee for the notification: a persisting condition must
+# not re-notify every tick. This is the check that would catch a regression to
+# level-triggered firing, which for notifications means spamming the user.
+if [ "$AUTHOR" = "0" ]; then
+  nhits="$(notify_hits)"
+  [ "$nhits" = "1" ] || { echo "FAIL: expected exactly 1 notification after further ticks, got $nhits"; exit 1; }
+  echo "notifications=$nhits"
+fi
 
 # The agent actually executed to completion (not just that a ticket appeared):
 # assert at least one completed run recorded in the agents store. Checked after

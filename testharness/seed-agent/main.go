@@ -11,9 +11,20 @@
 //
 // Env:
 //
-//	AGENTS_DB       sqlite path (default ./agents.db)
-//	AGENT_INTERVAL  poll interval, Go duration (default 1m; CI uses a short one)
-//	AGENT_BARCODE   watched barcode (default ABC-123)
+// It also opts the agent into NOTIFICATION (#28) with a sentinel template, so
+// the deterministic gate can assert the firing pushed a message to the
+// creator's conversation. Authoring runs get their delivery target injected by
+// the host; a pre-seeded agent has no such context, so the console channel's
+// (channel, conversation) pair is written in directly.
+//
+// Env:
+//
+//	AGENTS_DB        sqlite path (default ./agents.db)
+//	AGENT_INTERVAL   poll interval, Go duration (default 1m; CI uses a short one)
+//	AGENT_BARCODE    watched barcode (default ABC-123)
+//	NOTIFY_CHANNEL   channel that delivers the notification (default console)
+//	NOTIFY_CONVERSATION  conversation id on that channel (default console)
+//	NOTIFY_MARKER    sentinel prefix the E2E greps for (default E2E-NOTIFY)
 package main
 
 import (
@@ -79,7 +90,26 @@ workflow "Refill stock for %s" {
 	if err != nil {
 		log.Fatalf("seed-agent: create agent: %v", err)
 	}
-	log.Printf("seed-agent: created agent %s (%s) interval=%s barcode=%s", a.ID, a.Name, interval, barcode)
+
+	// Notification opt-in. The template is a single greppable line carrying the
+	// observed facts, so the E2E asserts the message was rendered and delivered
+	// — not merely that a send was attempted.
+	target := agent.DeliveryTarget{
+		ChannelID:      getenv("NOTIFY_CHANNEL", "console"),
+		ConversationID: getenv("NOTIFY_CONVERSATION", "console"),
+		SenderID:       "user",
+	}
+	marker := getenv("NOTIFY_MARKER", "E2E-NOTIFY")
+	spec := agent.NotifySpec{
+		Enabled:  true,
+		Template: marker + " {{agent_name}} {{trigger}} {{facts}}",
+	}
+	if err := mgr.SaveNotification(context.Background(), a.ID, target, spec); err != nil {
+		log.Fatalf("seed-agent: save notification: %v", err)
+	}
+
+	log.Printf("seed-agent: created agent %s (%s) interval=%s barcode=%s notify=%s/%s",
+		a.ID, a.Name, interval, barcode, target.ChannelID, target.ConversationID)
 }
 
 func getenv(k, def string) string {
