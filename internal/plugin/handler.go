@@ -267,18 +267,19 @@ func (h *Handler) actionShow(ctx context.Context, req pkg.Request, rc agent.RunC
 	view := summarize(a)
 	view["talon_source"] = a.TalonSource
 	view["triggers"] = a.Triggers
+	// Neither branch echoes where the agent reaches the user: the escalation
+	// session key already encodes channel + conversation, so echoing it hands
+	// the LLM the same address the notification target withholds. show reports
+	// THAT the agent can reach its creator, never where.
 	if esc, found, err := h.mgr.GetEscalation(ctx, a.ID); err == nil && found && esc.Enabled {
 		view["escalation"] = map[string]any{
 			"enabled":         esc.Enabled,
-			"session_id":      esc.SessionID,
 			"prompt_template": esc.PromptTemplate,
 			"max_per_window":  esc.MaxPerWindow,
 			"window_seconds":  esc.WindowSeconds,
 		}
 	}
 	if n, found, err := h.mgr.GetNotification(ctx, a.ID); err == nil && found && n.Enabled {
-		// The target itself is deliberately NOT echoed: the LLM must not learn
-		// (and then hardcode) a chat address.
 		view["notification"] = map[string]any{
 			"enabled":  n.Enabled,
 			"template": n.Template,

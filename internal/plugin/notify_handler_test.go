@@ -142,3 +142,31 @@ func TestShow_ReportsNotificationWithoutLeakingTheAddress(t *testing.T) {
 		}
 	}
 }
+
+// The escalation branch of show must withhold the address for the same reason:
+// the session key encodes channel + conversation, so echoing it is the same
+// leak by another name.
+func TestShow_ReportsEscalationWithoutLeakingTheSession(t *testing.T) {
+	ctx := context.Background()
+	h := testHandler(t)
+	args := ctxArgs(map[string]string{
+		"name": "restock", "talon_source": `workflow "ok" {}`,
+		"escalate": "true", "session_id": "u1:telegram:42",
+	})
+	if resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "c1", Action: "create", Args: args}, &fakeHost{}); resp.Error != "" {
+		t.Fatalf("create: %q", resp.Error)
+	}
+	resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "s1", Action: "show",
+		Args: ctxArgs(map[string]string{"id": "restock"})}, &fakeHost{})
+	if resp.Error != "" {
+		t.Fatalf("show: %q", resp.Error)
+	}
+	if !strings.Contains(resp.StructuredContent, `"escalation"`) {
+		t.Errorf("show should report the escalation config; got %s", resp.StructuredContent)
+	}
+	for _, leak := range []string{"u1:telegram:42", `"session_id"`} {
+		if strings.Contains(resp.StructuredContent, leak) {
+			t.Errorf("show leaked the escalation session (%s): %s", leak, resp.StructuredContent)
+		}
+	}
+}
