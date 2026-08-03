@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	pkg "github.com/opentalon/opentalon/pkg/plugin"
@@ -123,4 +124,30 @@ func TestExecute_RequiresCallbacks(t *testing.T) {
 	if resp := h.Execute(pkg.Request{ID: "x"}); resp.Error == "" {
 		t.Error("unary Execute should return an error")
 	}
+}
+
+// TestConfigureDuringTick_NoRace catches the data race on the engine/talon
+// fields that Configure swaps out from under an in-flight action. Only
+// meaningful under -race.
+func TestConfigureDuringTick_NoRace(t *testing.T) {
+	h := testHandler(t)
+	host := &fakeHost{}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			h.ExecuteWithCallbacks(context.Background(), pkg.Request{ID: "t1", Action: "tick"}, host)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			if err := h.Configure(`{"talon_plugin_name":"talon"}`); err != nil {
+				t.Errorf("configure: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }

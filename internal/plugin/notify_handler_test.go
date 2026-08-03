@@ -57,6 +57,23 @@ func TestCreate_NotifyRejectedWithoutDeliveryContext(t *testing.T) {
 	if !strings.Contains(resp.Error, "deliver") {
 		t.Errorf("error should explain the missing target; got %q", resp.Error)
 	}
+	// The rejection must happen before the agent is committed, otherwise a
+	// failed create leaves a row behind and the retry collides on the name.
+	if _, err := h.mgr.Get(context.Background(), "g1", "restock"); err == nil {
+		t.Error("a rejected notify must reject before the agent is stored")
+	}
+}
+
+func TestCreate_EscalateRejectedWithoutSession(t *testing.T) {
+	h := testHandler(t)
+	args := ctxArgs(map[string]string{"name": "restock", "talon_source": `workflow "ok" {}`, "escalate": "true"})
+	resp := h.ExecuteWithCallbacks(context.Background(), pkg.Request{ID: "c1", Action: "create", Args: args}, &fakeHost{})
+	if resp.Error == "" {
+		t.Fatal("expected escalate.enabled with no session to be rejected")
+	}
+	if _, err := h.mgr.Get(context.Background(), "g1", "restock"); err == nil {
+		t.Error("a rejected escalate must reject before the agent is stored")
+	}
 }
 
 func TestCreate_NotifyDisabledNeedsNoDeliveryContext(t *testing.T) {

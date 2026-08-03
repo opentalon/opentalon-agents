@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	pkg "github.com/opentalon/opentalon/pkg/plugin"
@@ -24,7 +25,11 @@ var promptText string
 // advertises SupportsCallbacks=true because every language operation
 // (validate, run) is a callback to talon-plugin through the host, which
 // requires a live HostCaller — available only on the bidi path.
+// Configure can arrive concurrently with an in-flight action (nothing in the
+// host contract serializes them), and it replaces talon/engine wholesale, so
+// mu guards those two fields: write in Configure, read on every use.
 type Handler struct {
+	mu     sync.RWMutex
 	cfg    *config.Config
 	mgr    *agent.Manager
 	talon  talonProxy
@@ -74,6 +79,7 @@ func (h *Handler) Configure(configJSON string) error {
 	if err != nil {
 		return fmt.Errorf("agents: configure: %w", err)
 	}
+	h.mu.Lock()
 	if parsed.DB.DSN != h.cfg.DB.DSN || parsed.DB.Driver != h.cfg.DB.Driver {
 		slog.Warn("opentalon-agents: DB config in Configure differs from startup, live DB handle unchanged",
 			"startup_driver", h.cfg.DB.Driver, "startup_dsn", h.cfg.DB.DSN,
@@ -84,9 +90,38 @@ func (h *Handler) Configure(configJSON string) error {
 	// The engine caches the plugin names it calls out to (talon, escalation,
 	// notify) in its proxies, so it has to be rebuilt for a configured name to
 	// take effect. It keeps no in-memory state — everything is in the DB.
-	h.engine = NewEngine(h.cfg, h.mgr)
-	slog.Info("opentalon-agents: configured", "talon_plugin", h.cfg.TalonPluginName, "db_driver", h.cfg.DB.Driver, "default_group_id", h.cfg.DefaultGroupID)
+	//
+	// It gets its own copy of the config, not h.cfg: a Tick reads cfg fields
+	// (MaxItemsPerPoll, backoff) for as long as it runs, and the next
+	// Configure would otherwise overwrite them underneath it.
+	engineCfg := *parsed
+	h.engine = NewEngine(&engineCfg, h.mgr)
+	h.mu.Unlock()
+	slog.Info("opentalon-agents: configured", "talon_plugin", parsed.TalonPluginName, "db_driver", parsed.DB.Driver, "default_group_id", parsed.DefaultGroupID)
 	return nil
+}
+
+// currentEngine returns the engine to use for this call. Configure may swap
+// the pointer at any time; a call in flight keeps the one it read.
+func (h *Handler) currentEngine() *Engine {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.engine
+}
+
+// currentTalon returns the talon proxy to use for this call, same rationale.
+func (h *Handler) currentTalon() talonProxy {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.talon
+}
+
+// currentCfg returns a snapshot of the config for this call: Configure
+// overwrites *h.cfg in place, so the value has to be copied under the lock.
+func (h *Handler) currentCfg() config.Config {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return *h.cfg
 }
 
 // ExecuteWithCallbacks is the bidi path: it dispatches every action and
@@ -105,7 +140,8 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 		// from an explicit config value. Prod therefore always fails closed
 		// here: no path can create/act on an agent without an authenticated
 		// group_id, regardless of config or env.
-		groupID = devFallbackGroupID(h.cfg, req.Action)
+		cfg := h.currentCfg()
+		groupID = devFallbackGroupID(&cfg, req.Action)
 	}
 	if groupID == "" {
 		return errResp(req.ID, "missing group_id (should be injected by the host)")
@@ -146,7 +182,7 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 // the LLM, and needs the live HostCaller to poll sources and reach
 // talon-plugin.
 func (h *Handler) actionTick(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
-	res, err := h.engine.Tick(ctx, host)
+	res, err := h.currentEngine().Tick(ctx, host)
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
@@ -175,6 +211,17 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	nspec, err := agent.ParseNotifySpec(req.Args["notify"])
 	if err != nil {
 		return errResp(req.ID, err.Error())
+	}
+	// Reject an opt-in that has nowhere to deliver to BEFORE the agent is
+	// committed. On create there is no stored row to fall back on, so the
+	// check saveNotification would make later is fully decidable here — and a
+	// post-Create rejection would leave a persisted agent behind a failed
+	// call (the retry then collides on the unique name).
+	if nspec != nil && nspec.Enabled && !rc.Delivery().Addressable() {
+		return errResp(req.ID, "notify.enabled needs a conversation to deliver to, but none is available here")
+	}
+	if spec != nil && spec.Enabled && rc.SessionID == "" {
+		return errResp(req.ID, "escalate.enabled needs an interactive session to address the turn to, but none is available here")
 	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
@@ -253,7 +300,7 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 	started := time.Now().UTC()
 	run.StartedAt = &started
 
-	result, runErr := h.talon.Run(ctx, host, a.TalonSource)
+	result, runErr := h.currentTalon().Run(ctx, host, a.TalonSource)
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 
@@ -383,9 +430,10 @@ func (h *Handler) saveNotification(ctx context.Context, callID, agentID string, 
 // populated error response and bad=true. On a valid source it returns
 // bad=false.
 func (h *Handler) validate(ctx context.Context, callID string, host pkg.HostCaller, src string) (pkg.Response, bool) {
-	ok, diagnostics, err := h.talon.Check(ctx, host, src)
+	talon := h.currentTalon()
+	ok, diagnostics, err := talon.Check(ctx, host, src)
 	if err != nil {
-		return errResp(callID, fmt.Sprintf("could not validate Talon source (is %q loaded?): %v", h.cfg.TalonPluginName, err)), true
+		return errResp(callID, fmt.Sprintf("could not validate Talon source (is %q loaded?): %v", talon.pluginName, err)), true
 	}
 	if !ok {
 		return errResp(callID, "invalid Talon source; fix and retry:\n"+diagnostics), true
