@@ -62,6 +62,7 @@ plugins:
       db: { driver: sqlite, dsn: ./agents.db }
       talon_plugin_name: talon-plugin
       webhook_secret: "${AGENTS_WEBHOOK_SECRET}"   # shared bearer for the webhook endpoint
+      notify_plugin_name: _notify                  # host entrypoint for pushed notifications
   talon-plugin:
     enabled: true
     github: opentalon/talon-plugin
@@ -276,18 +277,67 @@ Guardrails: escalation is **opt-in per agent**, **edge-triggered** (fires on the
 
 ---
 
+## Proactive notifications: the agent that just tells you
+
+Escalation is the expensive answer to *"let me know"*. Most of the time the user doesn't want an investigation — they want **a message**: *"tell me when stock drops below 10."* That's the **`notify`** argument.
+
+```json
+{ "enabled": true }
+```
+
+or, with wording of your own:
+
+```json
+{ "enabled": true, "template": "{{agent_name}}: {{firings}}\n{{facts}}" }
+```
+
+When a notify-enabled agent fires — or, for a `schedule` agent, after each run — the plugin **pushes a plain message** to the conversation the agent was created in. No model runs, no turn starts, nothing is billed.
+
+**The LLM never sees an address.** `create` / `update` declare `session_id`, `channel_id`, `conversation_id`, `sender_id` as `InjectContextArgs`; the host fills in whichever it can resolve, and the plugin stores them in `agent_notifications` alongside the opt-in. At fire time the engine calls the host's notify entrypoint (`_notify.send`, configurable via `notify_plugin_name`) with that stored target plus provenance (`source: agent`, `agent_id`, `trigger`). `show` reports *that* notifications are on, never *where* they go — so a chat address can't leak into a future Talon program.
+
+**Operator requirement:** the host's `_notify` entrypoint is opt-in and ships dark, like `_escalate`. Run the current host — `ghcr.io/opentalon/opentalon:latest`, rebuilt from `master` on every merge, which carries the entrypoint ([opentalon#322](https://github.com/opentalon/opentalon/pull/322)) — and set `orchestrator.notify.enabled: true` in the host config. Without the entrypoint the call fails and is logged; with it present but disabled, every send comes back `{delivered:false,reason:"disabled"}`. Either way the tick that produced the firing is unaffected.
+
+This is what closes the hole the old pattern left: previously an agent could only push by baking `mcp "<channel>" "send" { chat_id "..." }` into its source, which hardcodes the destination and breaks the moment the user switches channel.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as user chat
+  participant A as opentalon-agents
+  participant N as _notify host
+  Note over U,A: create time
+  U->>A: agents.create, notify true<br/>host injects session_id, channel_id,<br/>conversation_id, sender_id
+  A->>A: store target in agent_notifications
+  Note over A: fire time, no LLM
+  A->>N: RunAction _notify.send<br/>stored target, text,<br/>source agent, agent_id, trigger
+  N-->>U: message pushed to the same conversation
+```
+
+| | `notify` | `escalate` |
+|---|---|---|
+| Reaction | fixed message, pushed | full assistant turn |
+| Cost | none | tokens, billed to the owner |
+| Can ask a question | no | yes |
+| Bounded by | edge-triggered firing | firing **+** rate limit |
+
+Both are opt-in and independent; an agent may use either, both, or neither. A delivery failure (host without a notify entrypoint, channel gone) is **logged and dropped** — never retried, since a stale alert is worse than no alert, and never allowed to fail the tick that produced it. Enabling `notify` from a context with no resolvable conversation is rejected at create time rather than stored as an agent that can't reach anyone.
+
+**Not covered:** two-way Q&A from a background agent (the agent pushes; the user replies in chat and the LLM handles it from there) and autonomous self-update — both deliberately out of scope, see [#28](https://github.com/opentalon/opentalon-agents/issues/28).
+
+---
+
 ## Actions
 
 | Action | Description |
 |--------|-------------|
-| `create` | Author an agent from Talon source (+ optional triggers, + optional `escalate`). Validated via `talon-plugin.check` before storing. |
-| `list` / `show` | Inspect agents (`show` returns the full Talon source, and the escalation config when enabled). |
+| `create` | Author an agent from Talon source (+ optional triggers, + optional `escalate`, + optional `notify`). Validated via `talon-plugin.check` before storing. |
+| `list` / `show` | Inspect agents (`show` returns the full Talon source, plus the escalation and notification config when enabled — never the delivery address). |
 | `run` | Execute an agent's program now (inline) and return the result. _shipped_ |
-| `update` | Replace the Talon source / triggers / escalation setting (re-validated). |
+| `update` | Replace the Talon source / triggers / escalation / notification setting (re-validated). |
 | `enable` / `disable` / `delete` | Lifecycle. |
 | `tick` | Hidden (`UserOnly`) — fired by the host scheduler to drive watchers (poll → map → evaluate). _implemented_ |
 
-`group_id` / `entity_id` are injected by the host per call; every operation is group-scoped. All actions run on the bidi path (a live `HostCaller` is needed to reach `talon-plugin`).
+`group_id` / `entity_id` are injected by the host per call; every operation is group-scoped. `create` / `update` additionally take the caller's delivery context (`session_id`, `channel_id`, `conversation_id`, `sender_id`) so escalations and notifications can reach the creator later. All actions run on the bidi path (a live `HostCaller` is needed to reach `talon-plugin`).
 
 ---
 
@@ -299,12 +349,15 @@ Guardrails: escalation is **opt-in per agent**, **edge-triggered** (fires on the
 - **Phase 4 — _implemented_** ([#13](https://github.com/opentalon/opentalon-agents/issues/13)): **`schedule` (cron) triggers** (one-shot `workflow` agent on a 5-field cron, tracked via `next_cron_at`, run through `execute_workflow`); **create-time trigger validation**; **multi-entity polls** — a poll trigger with `items_path` maps every element of a list to a fact (value_path/id_field per item), capped by `max_items_per_poll` (drops are logged, never silent); and a **configurable backoff cap** (`max_backoff_seconds`, default 30m).
 - **Phase 5 — escalation & sub-agent mode _implemented_** ([#30](https://github.com/opentalon/opentalon-agents/issues/30)): a **hybrid** reaction. Detection stays deterministic (the tick), but an agent can opt into `escalate` so that when its watcher fires, instead of only running a fixed Talon action, the plugin starts a full assistant **reasoning turn** in the creator's session (via the host's built-in `_escalate` entrypoint — requires `opentalon` ≥ `v0.0.22` with `orchestrator.escalation.enabled`). That turn can investigate (including fanning out sub-agent checks), decide, and **ask the user** what to do; its reply is pushed back to the user's channel tagged as agent-originated (`source: agent`, `agent_id`, `trigger`). Opt-in per agent, edge-triggered, and rate-limited (`escalation_max_per_window` / `escalation_window_seconds`, per-agent overridable).
 
+- **Phase 6 — proactive notifications _implemented_** ([#28](https://github.com/opentalon/opentalon-agents/issues/28)): an agent can opt into `notify` and **push a message to its creator** when it fires (or after each scheduled run) — model-free and free of charge, the cheap counterpart to `escalate`. The delivery target (`session_id` / `channel_id` / `conversation_id` / `sender_id`) is captured from host-injected context at create time into `agent_notifications`, so the LLM never sees or hardcodes a chat address; at fire time the engine calls the host's `_notify.send` entrypoint (`notify_plugin_name`; requires the current host image with `orchestrator.notify.enabled`) with that target plus `source: agent` / `agent_id` / `trigger`. Delivery failures are logged and dropped, never retried and never fatal to the tick.
+
 ## Durability & restart
 
 The plugin holds **no in-memory agent state** — the engine is DB-driven. Every `agents.tick` re-queries the DB for enabled, due agents (poll / schedule / queued webhooks) and processes them. So after a plugin or host restart, agents resume automatically:
 
 - **agents** (source, triggers, enabled) and **agent_state** (`facts_snapshot_json`, `entity_map_json`, `next_poll_at`, `next_cron_at`, `consecutive_failures`) are persisted; each `evaluate` re-hydrates the Session from the snapshot, so an unchanged value fires nothing (no false re-fires on restart).
 - **pending_events** (queued webhooks) survive and drain on the next tick.
+- **agent_escalations** / **agent_notifications** (opt-in config + the creator's session / delivery target) are persisted too, so an agent keeps reaching the right person across restarts — no live session is required at fire time.
 
 The only external requirement is that the host keeps firing `agents.tick` — its `scheduler.jobs` entry lives in host config (dynamic jobs persist in `dataDir/scheduler/jobs.yaml`), so it resumes on host restart too. Nothing needs to "bring agents back online."
 

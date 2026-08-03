@@ -139,9 +139,13 @@ func (m *Manager) Delete(ctx context.Context, groupID, idOrName string) error {
 	if _, err := m.db.SQL().ExecContext(ctx, q, a.ID); err != nil {
 		return fmt.Errorf("agent delete: %w", err)
 	}
-	// Best-effort cleanup of the side tables. A leftover escalation row would
-	// be harmless (no agent to fire it) but we keep the store tidy.
+	// Best-effort cleanup of the side tables. A leftover escalation or
+	// notification row would be harmless (no agent to fire it) but we keep the
+	// store tidy.
 	if err := m.DeleteEscalation(ctx, a.ID); err != nil {
+		return err
+	}
+	if err := m.DeleteNotification(ctx, a.ID); err != nil {
 		return err
 	}
 	return nil

@@ -20,19 +20,21 @@ import (
 // It lives here (not in package agent) because it needs the live
 // HostCaller and the talon proxy alongside the Manager.
 type Engine struct {
-	cfg   *config.Config
-	mgr   *agent.Manager
-	talon talonProxy
-	esc   escalator
+	cfg    *config.Config
+	mgr    *agent.Manager
+	talon  talonProxy
+	esc    escalator
+	notify notifier
 }
 
 // NewEngine builds the tick engine.
 func NewEngine(cfg *config.Config, mgr *agent.Manager) *Engine {
 	return &Engine{
-		cfg:   cfg,
-		mgr:   mgr,
-		talon: talonProxy{pluginName: cfg.TalonPluginName},
-		esc:   escalator{pluginName: cfg.EscalationPluginName},
+		cfg:    cfg,
+		mgr:    mgr,
+		talon:  talonProxy{pluginName: cfg.TalonPluginName},
+		esc:    escalator{pluginName: cfg.EscalationPluginName},
+		notify: notifier{pluginName: cfg.NotifyPluginName},
 	}
 }
 
@@ -133,11 +135,13 @@ func (e *Engine) scheduleAgent(ctx context.Context, host pkg.HostCaller, a agent
 		run.Status = agent.StatusFailed
 		run.Error = runErr.Error()
 		_, _ = e.mgr.CreateRun(ctx, run)
+		e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerSchedule, Error: runErr.Error()}, now)
 		return runErr
 	}
 	run.Status = agent.StatusCompleted
 	run.Result = resultJSON(result)
 	_, _ = e.mgr.CreateRun(ctx, run)
+	e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerSchedule, Result: run.Result}, now)
 	return nil
 }
 
@@ -205,6 +209,9 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if len(evalRes.Firings) > 0 {
 		e.recordRun(ctx, a, agent.TriggerWebhook, factsJSON, evalRes, now)
 		e.maybeEscalate(ctx, host, a, agent.TriggerWebhook, factsJSON, evalRes, now)
+		e.maybeNotify(ctx, host, a, notifyEvent{
+			Trigger: agent.TriggerWebhook, Facts: factsJSON, Firings: evalRes.Firings,
+		}, now)
 	}
 	return len(evalRes.Firings), nil
 }
@@ -256,6 +263,9 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 	if len(evalRes.Firings) > 0 {
 		e.recordRun(ctx, a, agent.TriggerPoll, factsJSON, evalRes, now)
 		e.maybeEscalate(ctx, host, a, agent.TriggerPoll, factsJSON, evalRes, now)
+		e.maybeNotify(ctx, host, a, notifyEvent{
+			Trigger: agent.TriggerPoll, Facts: factsJSON, Firings: evalRes.Firings,
+		}, now)
 	}
 	return len(evalRes.Firings), nil
 }

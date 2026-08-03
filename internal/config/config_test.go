@@ -19,6 +19,19 @@ func TestParse_Defaults(t *testing.T) {
 	if cfg.PollFloorSeconds != 15 || cfg.MaxItemsPerPoll != 500 {
 		t.Errorf("default poll bounds: %d / %d", cfg.PollFloorSeconds, cfg.MaxItemsPerPoll)
 	}
+	if cfg.NotifyPluginName != "_notify" {
+		t.Errorf("default notify plugin name: %q", cfg.NotifyPluginName)
+	}
+}
+
+func TestParse_NotifyPluginOverride(t *testing.T) {
+	cfg, err := Parse(`{"notify_plugin_name":"messages"}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.NotifyPluginName != "messages" {
+		t.Errorf("notify plugin override: %q", cfg.NotifyPluginName)
+	}
 }
 
 func TestParse_Overrides(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	pkg "github.com/opentalon/opentalon/pkg/plugin"
@@ -24,7 +25,11 @@ var promptText string
 // advertises SupportsCallbacks=true because every language operation
 // (validate, run) is a callback to talon-plugin through the host, which
 // requires a live HostCaller — available only on the bidi path.
+// Configure can arrive concurrently with an in-flight action (nothing in the
+// host contract serializes them), and it replaces talon/engine wholesale, so
+// mu guards those two fields: write in Configure, read on every use.
 type Handler struct {
+	mu     sync.RWMutex
 	cfg    *config.Config
 	mgr    *agent.Manager
 	talon  talonProxy
@@ -74,6 +79,7 @@ func (h *Handler) Configure(configJSON string) error {
 	if err != nil {
 		return fmt.Errorf("agents: configure: %w", err)
 	}
+	h.mu.Lock()
 	if parsed.DB.DSN != h.cfg.DB.DSN || parsed.DB.Driver != h.cfg.DB.Driver {
 		slog.Warn("opentalon-agents: DB config in Configure differs from startup, live DB handle unchanged",
 			"startup_driver", h.cfg.DB.Driver, "startup_dsn", h.cfg.DB.DSN,
@@ -81,8 +87,41 @@ func (h *Handler) Configure(configJSON string) error {
 	}
 	*h.cfg = *parsed
 	h.talon = talonProxy{pluginName: h.cfg.TalonPluginName}
-	slog.Info("opentalon-agents: configured", "talon_plugin", h.cfg.TalonPluginName, "db_driver", h.cfg.DB.Driver, "default_group_id", h.cfg.DefaultGroupID)
+	// The engine caches the plugin names it calls out to (talon, escalation,
+	// notify) in its proxies, so it has to be rebuilt for a configured name to
+	// take effect. It keeps no in-memory state — everything is in the DB.
+	//
+	// It gets its own copy of the config, not h.cfg: a Tick reads cfg fields
+	// (MaxItemsPerPoll, backoff) for as long as it runs, and the next
+	// Configure would otherwise overwrite them underneath it.
+	engineCfg := *parsed
+	h.engine = NewEngine(&engineCfg, h.mgr)
+	h.mu.Unlock()
+	slog.Info("opentalon-agents: configured", "talon_plugin", parsed.TalonPluginName, "db_driver", parsed.DB.Driver, "default_group_id", parsed.DefaultGroupID)
 	return nil
+}
+
+// currentEngine returns the engine to use for this call. Configure may swap
+// the pointer at any time; a call in flight keeps the one it read.
+func (h *Handler) currentEngine() *Engine {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.engine
+}
+
+// currentTalon returns the talon proxy to use for this call, same rationale.
+func (h *Handler) currentTalon() talonProxy {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.talon
+}
+
+// currentCfg returns a snapshot of the config for this call: Configure
+// overwrites *h.cfg in place, so the value has to be copied under the lock.
+func (h *Handler) currentCfg() config.Config {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return *h.cfg
 }
 
 // ExecuteWithCallbacks is the bidi path: it dispatches every action and
@@ -101,12 +140,20 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 		// from an explicit config value. Prod therefore always fails closed
 		// here: no path can create/act on an agent without an authenticated
 		// group_id, regardless of config or env.
-		groupID = devFallbackGroupID(h.cfg, req.Action)
+		cfg := h.currentCfg()
+		groupID = devFallbackGroupID(&cfg, req.Action)
 	}
 	if groupID == "" {
 		return errResp(req.ID, "missing group_id (should be injected by the host)")
 	}
-	rc := agent.RunContext{GroupID: groupID, EntityID: req.Args["entity_id"], SessionID: req.Args["session_id"]}
+	rc := agent.RunContext{
+		GroupID:        groupID,
+		EntityID:       req.Args["entity_id"],
+		SessionID:      req.Args["session_id"],
+		ChannelID:      req.Args["channel_id"],
+		ConversationID: req.Args["conversation_id"],
+		SenderID:       req.Args["sender_id"],
+	}
 
 	switch req.Action {
 	case "create":
@@ -135,7 +182,7 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 // the LLM, and needs the live HostCaller to poll sources and reach
 // talon-plugin.
 func (h *Handler) actionTick(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
-	res, err := h.engine.Tick(ctx, host)
+	res, err := h.currentEngine().Tick(ctx, host)
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
@@ -161,6 +208,21 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	nspec, err := agent.ParseNotifySpec(req.Args["notify"])
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
+	// Reject an opt-in that has nowhere to deliver to BEFORE the agent is
+	// committed. On create there is no stored row to fall back on, so the
+	// check saveNotification would make later is fully decidable here — and a
+	// post-Create rejection would leave a persisted agent behind a failed
+	// call (the retry then collides on the unique name).
+	if nspec != nil && nspec.Enabled && !rc.Delivery().Addressable() {
+		return errResp(req.ID, "notify.enabled needs a conversation to deliver to, but none is available here")
+	}
+	if spec != nil && spec.Enabled && rc.SessionID == "" {
+		return errResp(req.ID, "escalate.enabled needs an interactive session to address the turn to, but none is available here")
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
@@ -177,6 +239,9 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 		return errResp(req.ID, err.Error())
 	}
 	if resp, bad := h.saveEscalation(ctx, req.ID, a.ID, rc, spec); bad {
+		return resp
+	}
+	if resp, bad := h.saveNotification(ctx, req.ID, a.ID, rc, nspec); bad {
 		return resp
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Created agent %q (id %s).", a.Name, a.ID), summarize(a))
@@ -202,13 +267,22 @@ func (h *Handler) actionShow(ctx context.Context, req pkg.Request, rc agent.RunC
 	view := summarize(a)
 	view["talon_source"] = a.TalonSource
 	view["triggers"] = a.Triggers
+	// Neither branch echoes where the agent reaches the user: the escalation
+	// session key already encodes channel + conversation, so echoing it hands
+	// the LLM the same address the notification target withholds. show reports
+	// THAT the agent can reach its creator, never where.
 	if esc, found, err := h.mgr.GetEscalation(ctx, a.ID); err == nil && found && esc.Enabled {
 		view["escalation"] = map[string]any{
 			"enabled":         esc.Enabled,
-			"session_id":      esc.SessionID,
 			"prompt_template": esc.PromptTemplate,
 			"max_per_window":  esc.MaxPerWindow,
 			"window_seconds":  esc.WindowSeconds,
+		}
+	}
+	if n, found, err := h.mgr.GetNotification(ctx, a.ID); err == nil && found && n.Enabled {
+		view["notification"] = map[string]any{
+			"enabled":  n.Enabled,
+			"template": n.Template,
 		}
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Agent %q (id %s).", a.Name, a.ID), view)
@@ -227,7 +301,7 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 	started := time.Now().UTC()
 	run.StartedAt = &started
 
-	result, runErr := h.talon.Run(ctx, host, a.TalonSource)
+	result, runErr := h.currentTalon().Run(ctx, host, a.TalonSource)
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 
@@ -265,6 +339,10 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
+	nspec, err := agent.ParseNotifySpec(req.Args["notify"])
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
 	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
 		return resp
 	}
@@ -273,6 +351,9 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 		return errResp(req.ID, err.Error())
 	}
 	if resp, bad := h.saveEscalation(ctx, req.ID, a.ID, rc, spec); bad {
+		return resp
+	}
+	if resp, bad := h.saveNotification(ctx, req.ID, a.ID, rc, nspec); bad {
 		return resp
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Updated agent %q (id %s).", a.Name, a.ID), summarize(a))
@@ -321,13 +402,39 @@ func (h *Handler) saveEscalation(ctx context.Context, callID, agentID string, rc
 	return pkg.Response{}, false
 }
 
+// saveNotification persists the agent's notification config and the delivery
+// target from the call context when the author supplied one (spec != nil); a
+// nil spec leaves any existing config untouched. Opting in requires somewhere
+// to deliver to: reject enable when neither this call nor a previously stored
+// row carries an addressable target.
+func (h *Handler) saveNotification(ctx context.Context, callID, agentID string, rc agent.RunContext, spec *agent.NotifySpec) (pkg.Response, bool) {
+	if spec == nil {
+		return pkg.Response{}, false
+	}
+	target := rc.Delivery()
+	if spec.Enabled && !target.Addressable() {
+		existing, found, err := h.mgr.GetNotification(ctx, agentID)
+		if err != nil {
+			return errResp(callID, err.Error()), true
+		}
+		if !found || !existing.Target.Addressable() {
+			return errResp(callID, "notify.enabled needs a conversation to deliver to, but none is available here"), true
+		}
+	}
+	if err := h.mgr.SaveNotification(ctx, agentID, target, *spec); err != nil {
+		return errResp(callID, err.Error()), true
+	}
+	return pkg.Response{}, false
+}
+
 // validate runs talon-plugin.check and, on invalid source, returns a
 // populated error response and bad=true. On a valid source it returns
 // bad=false.
 func (h *Handler) validate(ctx context.Context, callID string, host pkg.HostCaller, src string) (pkg.Response, bool) {
-	ok, diagnostics, err := h.talon.Check(ctx, host, src)
+	talon := h.currentTalon()
+	ok, diagnostics, err := talon.Check(ctx, host, src)
 	if err != nil {
-		return errResp(callID, fmt.Sprintf("could not validate Talon source (is %q loaded?): %v", h.cfg.TalonPluginName, err)), true
+		return errResp(callID, fmt.Sprintf("could not validate Talon source (is %q loaded?): %v", talon.pluginName, err)), true
 	}
 	if !ok {
 		return errResp(callID, "invalid Talon source; fix and retry:\n"+diagnostics), true
