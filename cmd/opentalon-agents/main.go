@@ -21,7 +21,7 @@ import (
 )
 
 func main() {
-	cfg, err := config.Parse(os.Getenv("OPENTLN_CONFIG"))
+	cfg, err := config.Parse(os.Getenv("OPENTALON_CONFIG"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "opentalon-agents: parse config: %v\n", err)
 		os.Exit(1)
@@ -40,7 +40,7 @@ func main() {
 	// Webhook ingress: when the host grants an HTTP port (expose_http),
 	// serve the webhook endpoint on the private loopback listener it
 	// reverse-proxies. It only enqueues; the tick drains it.
-	if port := os.Getenv("OPENTLN_HTTP_PORT"); port != "" {
+	if port := os.Getenv("OPENTALON_HTTP_PORT"); port != "" {
 		srv := &http.Server{
 			Addr:              "127.0.0.1:" + port,
 			Handler:           api.NewWebhookServer(cfg, mgr),

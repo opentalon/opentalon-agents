@@ -67,7 +67,7 @@ func (h *Handler) Execute(req pkg.Request) pkg.Response {
 
 // Configure receives the host config block over the Init RPC, before any
 // Execute call. This is how the host actually delivers config — it does NOT
-// set OPENTLN_CONFIG on the subprocess — so we parse it here and apply it
+// set OPENTALON_CONFIG on the subprocess — so we parse it here and apply it
 // into the shared *cfg (the handler and engine hold the same pointer).
 //
 // The DB handle is already open (main.go opened it from the startup default),
