@@ -1,5 +1,5 @@
 // Package config parses the JSON blob the opentalon host delivers to the
-// plugin (via the OPENTLN_CONFIG env var / the Configure RPC).
+// plugin (via the OPENTALON_CONFIG env var / the Configure RPC).
 package config
 
 import (
