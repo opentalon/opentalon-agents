@@ -50,7 +50,7 @@ func TestDeliveryTargetAddressable(t *testing.T) {
 func TestNotificationRoundTripAndTargetPreservation(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, err := m.Create(ctx, Agent{Name: "w", GroupID: "g1", EntityID: "e1", TalonSource: "x"})
+	a, err := m.Create(ctx, Agent{Name: "w", GroupID: "g1", EntityID: "e1", TlnSource: "x"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestNotificationRoundTripAndTargetPreservation(t *testing.T) {
 func TestDeleteAgentRemovesNotification(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, err := m.Create(ctx, Agent{Name: "w", GroupID: "g1", TalonSource: "x"})
+	a, err := m.Create(ctx, Agent{Name: "w", GroupID: "g1", TlnSource: "x"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

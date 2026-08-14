@@ -25,8 +25,8 @@ func cronAgent(t *testing.T, mgr *agent.Manager) agent.Agent {
 	t.Helper()
 	a, err := mgr.Create(context.Background(), agent.Agent{
 		Name: "report", GroupID: "g1", Enabled: true,
-		TalonSource: `workflow "daily" { step "s" { mcp "reports" "run" { } } }`,
-		Triggers:    []agent.Trigger{{Type: agent.TriggerSchedule, Cron: "*/5 * * * *"}},
+		TlnSource: `workflow "daily" { step "s" { mcp "reports" "run" { } } }`,
+		Triggers:  []agent.Trigger{{Type: agent.TriggerSchedule, Cron: "*/5 * * * *"}},
 	})
 	if err != nil {
 		t.Fatalf("create cron agent: %v", err)

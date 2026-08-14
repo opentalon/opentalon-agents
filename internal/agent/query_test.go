@@ -9,9 +9,9 @@ func TestQueryAgents_Filters(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
 	src := `workflow "x" {}`
-	mustCreate(t, m, Agent{Name: "restock-a", GroupID: "g1", EntityID: "u1", TalonSource: src, Enabled: true})
-	mustCreate(t, m, Agent{Name: "restock-b", GroupID: "g1", EntityID: "u2", TalonSource: src, Enabled: true})
-	mustCreate(t, m, Agent{Name: "alerts", GroupID: "g2", EntityID: "u1", TalonSource: src, Enabled: false})
+	mustCreate(t, m, Agent{Name: "restock-a", GroupID: "g1", EntityID: "u1", TlnSource: src, Enabled: true})
+	mustCreate(t, m, Agent{Name: "restock-b", GroupID: "g1", EntityID: "u2", TlnSource: src, Enabled: true})
+	mustCreate(t, m, Agent{Name: "alerts", GroupID: "g2", EntityID: "u1", TlnSource: src, Enabled: false})
 
 	names := func(f AgentFilter) map[string]bool {
 		got, err := m.QueryAgents(ctx, f)

@@ -24,12 +24,12 @@ func TestManager_CRUDRoundTrip(t *testing.T) {
 	m := testManager(t)
 
 	created, err := m.Create(ctx, Agent{
-		Name:        "restock",
-		GroupID:     "g1",
-		EntityID:    "u1",
-		TalonSource: `workflow "x" {}`,
-		Triggers:    []Trigger{{Type: TriggerSchedule, Cron: "0 9 * * *"}},
-		Enabled:     true,
+		Name:      "restock",
+		GroupID:   "g1",
+		EntityID:  "u1",
+		TlnSource: `workflow "x" {}`,
+		Triggers:  []Trigger{{Type: TriggerSchedule, Cron: "0 9 * * *"}},
+		Enabled:   true,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -42,7 +42,7 @@ func TestManager_CRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get by name: %v", err)
 	}
-	if got.ID != created.ID || got.TalonSource != `workflow "x" {}` {
+	if got.ID != created.ID || got.TlnSource != `workflow "x" {}` {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 	if len(got.Triggers) != 1 || got.Triggers[0].Cron != "0 9 * * *" {
@@ -59,8 +59,8 @@ func TestManager_CRUDRoundTrip(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	got, _ = m.Get(ctx, "g1", created.ID)
-	if got.TalonSource != `workflow "y" {}` {
-		t.Errorf("update not persisted: %q", got.TalonSource)
+	if got.TlnSource != `workflow "y" {}` {
+		t.Errorf("update not persisted: %q", got.TlnSource)
 	}
 	if len(got.Triggers) != 1 {
 		t.Errorf("nil triggers on update should preserve existing, got %+v", got.Triggers)
@@ -83,7 +83,7 @@ func TestManager_CRUDRoundTrip(t *testing.T) {
 func TestManager_Runs(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, err := m.Create(ctx, Agent{Name: "a", GroupID: "g1", TalonSource: "workflow \"x\" {}"})
+	a, err := m.Create(ctx, Agent{Name: "a", GroupID: "g1", TlnSource: "workflow \"x\" {}"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

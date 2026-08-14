@@ -24,8 +24,8 @@ func fixture(t *testing.T, secret string) (http.Handler, *agent.Manager) {
 	mgr := agent.NewManager(db)
 	_, err = mgr.Create(context.Background(), agent.Agent{
 		Name: "restock", GroupID: "g1", EntityID: "u1", Enabled: true,
-		TalonSource: `workflow "x" {}`,
-		Triggers:    []agent.Trigger{{Type: agent.TriggerWebhook, Config: json.RawMessage(`{"value_path":"stock","attribute":"current_stock"}`)}},
+		TlnSource: `workflow "x" {}`,
+		Triggers:  []agent.Trigger{{Type: agent.TriggerWebhook, Config: json.RawMessage(`{"value_path":"stock","attribute":"current_stock"}`)}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -108,13 +108,13 @@ func get(h http.Handler, path, bearer string) *httptest.ResponseRecorder {
 func TestListAgents_FiltersAndAuth(t *testing.T) {
 	h, mgr := fixture(t, "s3cr3t") // fixture already has "restock" (g1, u1, webhook)
 	if _, err := mgr.Create(context.Background(), agent.Agent{
-		Name: "alerts", GroupID: "g2", EntityID: "u2", Enabled: true, TalonSource: `workflow "x" {}`,
+		Name: "alerts", GroupID: "g2", EntityID: "u2", Enabled: true, TlnSource: `workflow "x" {}`,
 		Triggers: []agent.Trigger{{Type: agent.TriggerManual}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	// group filter returns only g1's agent; never the Talon source.
+	// group filter returns only g1's agent; never the Tln source.
 	w := get(h, "/v1/agents?group_id=g1", "s3cr3t")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
@@ -123,8 +123,8 @@ func TestListAgents_FiltersAndAuth(t *testing.T) {
 	if !strings.Contains(body, "restock") || strings.Contains(body, "alerts") {
 		t.Errorf("group filter body: %s", body)
 	}
-	if strings.Contains(body, "talon_source") || strings.Contains(body, "workflow \\\"x\\\"") {
-		t.Errorf("list must not leak talon_source: %s", body)
+	if strings.Contains(body, "tln_source") || strings.Contains(body, "workflow \\\"x\\\"") {
+		t.Errorf("list must not leak tln_source: %s", body)
 	}
 
 	// name substring filter.

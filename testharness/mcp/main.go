@@ -4,17 +4,18 @@
 // It exposes three tools over the legacy HTTP+SSE transport (which mcp-plugin
 // connects to):
 //
-//   get_item(barcode)          -> {barcode, name, current_stock}
-//   list_low_stock(threshold)  -> {items: [{barcode, current_stock}, ...]}
-//   create_ticket(barcode,qty) -> {ticket_id, barcode, qty}
+//	get_item(barcode)          -> {barcode, name, current_stock}
+//	list_low_stock(threshold)  -> {items: [{barcode, current_stock}, ...]}
+//	create_ticket(barcode,qty) -> {ticket_id, barcode, qty}
 //
 // All numeric args are declared and read as strings: the agents poll trigger
 // passes args as map[string]string, so values arrive here as strings across
 // the host -> mcp-plugin -> server chain.
 //
 // Env:
-//   DATABASE_URL  postgres DSN (default postgres://<user>@localhost:5432/opentalon_test?sslmode=disable)
-//   ADDR          listen address (default :8765); mcp-plugin points at http://<addr>/sse
+//
+//	DATABASE_URL  postgres DSN (default postgres://<user>@localhost:5432/opentalon_test?sslmode=disable)
+//	ADDR          listen address (default :8765); mcp-plugin points at http://<addr>/sse
 package main
 
 import (

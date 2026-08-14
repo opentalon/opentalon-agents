@@ -1,11 +1,11 @@
--- agents: one persistent, LLM-authored Talon workflow agent per row.
+-- agents: one persistent, LLM-authored Tln workflow agent per row.
 CREATE TABLE IF NOT EXISTS agents (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
   description   TEXT NOT NULL DEFAULT '',
   group_id      TEXT NOT NULL,
   entity_id     TEXT NOT NULL DEFAULT '',
-  talon_source  TEXT NOT NULL,
+  tln_source  TEXT NOT NULL,
   triggers_json TEXT NOT NULL DEFAULT '[]',
   enabled       INTEGER NOT NULL DEFAULT 1,
   created_at    TEXT NOT NULL,

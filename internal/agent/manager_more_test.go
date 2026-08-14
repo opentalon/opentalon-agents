@@ -8,7 +8,7 @@ import (
 func TestManager_DuplicateNameRejected(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	base := Agent{Name: "dup", GroupID: "g1", TalonSource: `workflow "x" {}`}
+	base := Agent{Name: "dup", GroupID: "g1", TlnSource: `workflow "x" {}`}
 	if _, err := m.Create(ctx, base); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestManager_MutationsNotFound(t *testing.T) {
 func TestManager_FailedRunPersistsError(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, _ := m.Create(ctx, Agent{Name: "a", GroupID: "g1", TalonSource: `workflow "x" {}`})
+	a, _ := m.Create(ctx, Agent{Name: "a", GroupID: "g1", TlnSource: `workflow "x" {}`})
 
 	run, err := m.CreateRun(ctx, Run{AgentID: a.ID, TriggerType: "llm", Status: StatusRunning})
 	if err != nil {
@@ -60,7 +60,7 @@ func TestManager_FailedRunPersistsError(t *testing.T) {
 func TestManager_ListRunsLimit(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, _ := m.Create(ctx, Agent{Name: "a", GroupID: "g1", TalonSource: `workflow "x" {}`})
+	a, _ := m.Create(ctx, Agent{Name: "a", GroupID: "g1", TlnSource: `workflow "x" {}`})
 	for i := 0; i < 5; i++ {
 		if _, err := m.CreateRun(ctx, Run{AgentID: a.ID, TriggerType: "llm", Status: StatusCompleted}); err != nil {
 			t.Fatalf("create run %d: %v", i, err)

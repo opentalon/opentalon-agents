@@ -15,7 +15,7 @@ name: E2E
 #                                   fast + reliable.
 #   vcr-replay     (PR, label-gated) real authoring leg, served from a committed
 #                                   cassette via the vcr-proxy — deterministic,
-#                                   no secret. Proves chat -> LLM -> Talon agent.
+#                                   no secret. Proves chat -> LLM -> Tln agent.
 #                                   Opt-in: add the `e2e-vcr` label to a PR.
 #   vcr-record     (release/manual) drives the same authoring against real
 #                                   Anthropic through the proxy in record mode,
@@ -27,8 +27,8 @@ name: E2E
 # We re-record only when it matters — a prompt change (caught by cassette-check)
 # or a release — instead of nightly, mirroring opentalon's VCR flow.
 #
-# vcr-record requires repo secret ANTHROPIC_API_KEY. talon-language
-# (datalevin-server) and opentalon/{console-channel,talon-plugin,mcp-plugin}
+# vcr-record requires repo secret ANTHROPIC_API_KEY. tln-language
+# (datalevin-server) and opentalon/{console-channel,tln-plugin,mcp-plugin}
 # must be clone-able (public, or wire up a token).
 
 on:
@@ -90,8 +90,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: opentalon/talon-language
-          path: talon-language
+          repository: opentalon/tln-language
+          path: tln-language
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -111,7 +111,7 @@ jobs:
 
       - name: Start datalevin-server
         run: |
-          cd talon-language/datalevin-server
+          cd tln-language/datalevin-server
           nohup clojure -M:run > "$GITHUB_WORKSPACE/datalevin.log" 2>&1 &
           for i in $(seq 1 60); do
             sleep 2
@@ -164,7 +164,7 @@ jobs:
     name: E2E (VCR replay, real authoring leg)
     # Label-gated PR job: add the `e2e-vcr` label to a PR to run it (or dispatch
     # manually). Replays the committed cassette (testharness/ci/cassette.json) so
-    # the chat -> LLM -> Talon authoring leg runs deterministically, no secret.
+    # the chat -> LLM -> Tln authoring leg runs deterministically, no secret.
     # It is slow (host image build + plugin clones), hence opt-in rather than on
     # every PR. Authoring bugs that blocked it are fixed (#35 sub-minute poll
     # emitted a 6-field cron; opentalon/opentalon#313 agents.db SQLITE_BUSY).
@@ -184,8 +184,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
-          repository: opentalon/talon-language
-          path: talon-language
+          repository: opentalon/tln-language
+          path: tln-language
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -205,7 +205,7 @@ jobs:
 
       - name: Start datalevin-server
         run: |
-          cd talon-language/datalevin-server
+          cd tln-language/datalevin-server
           nohup clojure -M:run > "$GITHUB_WORKSPACE/datalevin.log" 2>&1 &
           for i in $(seq 1 60); do
             sleep 2
@@ -281,8 +281,8 @@ jobs:
           ref: ${{ github.event_name == 'release' && 'master' || github.ref }}
       - uses: actions/checkout@v4
         with:
-          repository: opentalon/talon-language
-          path: talon-language
+          repository: opentalon/tln-language
+          path: tln-language
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -302,7 +302,7 @@ jobs:
 
       - name: Start datalevin-server
         run: |
-          cd talon-language/datalevin-server
+          cd tln-language/datalevin-server
           nohup clojure -M:run > "$GITHUB_WORKSPACE/datalevin.log" 2>&1 &
           for i in $(seq 1 60); do
             sleep 2

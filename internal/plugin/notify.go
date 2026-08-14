@@ -19,7 +19,7 @@ import (
 const notifySendAction = "send"
 
 // notifier reaches the host's "push a message to a conversation" entrypoint.
-// It is the notification analogue of talonProxy and escalator: the plugin's
+// It is the notification analogue of tlnProxy and escalator: the plugin's
 // whole coupling to message delivery is this one RunAction call — it never
 // links a channel client and never learns a channel's wire format.
 type notifier struct {

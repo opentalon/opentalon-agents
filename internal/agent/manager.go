@@ -29,7 +29,7 @@ func NewManager(db *store.DB) *Manager { return &Manager{db: db} }
 const timeFmt = time.RFC3339
 
 // Create stores a new agent, generating its id and timestamps. The
-// caller is responsible for having validated TalonSource first.
+// caller is responsible for having validated TlnSource first.
 func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 	a.ID = uuid.NewString()
 	now := time.Now().UTC()
@@ -42,10 +42,10 @@ func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 		return Agent{}, fmt.Errorf("agent create: encode triggers: %w", err)
 	}
 	q := m.db.Dialect.Rebind(`INSERT INTO agents
-		(id, name, description, group_id, entity_id, talon_source, triggers_json, enabled, created_at, updated_at)
+		(id, name, description, group_id, entity_id, tln_source, triggers_json, enabled, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err = m.db.SQL().ExecContext(ctx, q,
-		a.ID, a.Name, a.Description, a.GroupID, a.EntityID, a.TalonSource,
+		a.ID, a.Name, a.Description, a.GroupID, a.EntityID, a.TlnSource,
 		string(triggers), boolToInt(a.Enabled), now.Format(timeFmt), now.Format(timeFmt))
 	if err != nil {
 		return Agent{}, fmt.Errorf("agent create: %w", err)
@@ -55,7 +55,7 @@ func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 
 // List returns all agents in the group, newest first.
 func (m *Manager) List(ctx context.Context, groupID string) ([]Agent, error) {
-	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, talon_source,
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
 		triggers_json, enabled, created_at, updated_at FROM agents
 		WHERE group_id = ? ORDER BY created_at DESC`)
 	rows, err := m.db.SQL().QueryContext(ctx, q, groupID)
@@ -76,7 +76,7 @@ func (m *Manager) List(ctx context.Context, groupID string) ([]Agent, error) {
 
 // Get resolves an agent by id or name within the group.
 func (m *Manager) Get(ctx context.Context, groupID, idOrName string) (Agent, error) {
-	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, talon_source,
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
 		triggers_json, enabled, created_at, updated_at FROM agents
 		WHERE group_id = ? AND (id = ? OR name = ?) LIMIT 1`)
 	row := m.db.SQL().QueryRowContext(ctx, q, groupID, idOrName, idOrName)
@@ -87,7 +87,7 @@ func (m *Manager) Get(ctx context.Context, groupID, idOrName string) (Agent, err
 	return a, err
 }
 
-// Update overwrites an agent's Talon source and triggers. The caller must
+// Update overwrites an agent's Tln source and triggers. The caller must
 // have validated newSource first. Returns the updated agent.
 func (m *Manager) Update(ctx context.Context, groupID, idOrName, newSource string, triggers []Trigger) (Agent, error) {
 	a, err := m.Get(ctx, groupID, idOrName)
@@ -102,12 +102,12 @@ func (m *Manager) Update(ctx context.Context, groupID, idOrName, newSource strin
 		return Agent{}, fmt.Errorf("agent update: encode triggers: %w", err)
 	}
 	now := time.Now().UTC()
-	q := m.db.Dialect.Rebind(`UPDATE agents SET talon_source = ?, triggers_json = ?, updated_at = ?
+	q := m.db.Dialect.Rebind(`UPDATE agents SET tln_source = ?, triggers_json = ?, updated_at = ?
 		WHERE id = ?`)
 	if _, err := m.db.SQL().ExecContext(ctx, q, newSource, string(tj), now.Format(timeFmt), a.ID); err != nil {
 		return Agent{}, fmt.Errorf("agent update: %w", err)
 	}
-	a.TalonSource = newSource
+	a.TlnSource = newSource
 	a.Triggers = triggers
 	a.UpdatedAt = now
 	return a, nil
@@ -279,7 +279,7 @@ func (m *Manager) SaveState(ctx context.Context, s AgentState) error {
 // tick is a system-wide, unscoped sweep. Whether a trigger is a poll and
 // its due-time are checked in Go against the per-agent state join.
 func (m *Manager) ListEnabledPollDue(ctx context.Context, now time.Time) ([]Agent, error) {
-	q := m.db.Dialect.Rebind(`SELECT a.id, a.name, a.description, a.group_id, a.entity_id, a.talon_source,
+	q := m.db.Dialect.Rebind(`SELECT a.id, a.name, a.description, a.group_id, a.entity_id, a.tln_source,
 		a.triggers_json, a.enabled, a.created_at, a.updated_at, s.next_poll_at
 		FROM agents a LEFT JOIN agent_state s ON s.agent_id = a.id
 		WHERE a.enabled = 1`)
@@ -310,7 +310,7 @@ func (m *Manager) ListEnabledPollDue(ctx context.Context, now time.Time) ([]Agen
 // trigger that is due (no state yet, or next_cron_at <= now), across all
 // groups. Like the poll sweep, but keyed on next_cron_at.
 func (m *Manager) ListEnabledScheduleDue(ctx context.Context, now time.Time) ([]Agent, error) {
-	q := m.db.Dialect.Rebind(`SELECT a.id, a.name, a.description, a.group_id, a.entity_id, a.talon_source,
+	q := m.db.Dialect.Rebind(`SELECT a.id, a.name, a.description, a.group_id, a.entity_id, a.tln_source,
 		a.triggers_json, a.enabled, a.created_at, a.updated_at, s.next_cron_at
 		FROM agents a LEFT JOIN agent_state s ON s.agent_id = a.id
 		WHERE a.enabled = 1`)
@@ -347,7 +347,7 @@ func scanAgentJoinedTime(s scanner) (Agent, *time.Time, error) {
 		updated  string
 		nextPoll sql.NullString
 	)
-	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TalonSource,
+	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TlnSource,
 		&triggers, &enabled, &created, &updated, &nextPoll); err != nil {
 		return Agent{}, nil, err
 	}
@@ -365,7 +365,7 @@ func scanAgentJoinedTime(s scanner) (Agent, *time.Time, error) {
 // QueryAgents lists agents matching the filter (all fields AND-combined),
 // newest first. Used by the read-only query API.
 func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, error) {
-	q := `SELECT id, name, description, group_id, entity_id, talon_source,
+	q := `SELECT id, name, description, group_id, entity_id, tln_source,
 		triggers_json, enabled, created_at, updated_at FROM agents WHERE 1=1`
 	var args []any
 	if f.GroupID != "" {
@@ -405,7 +405,7 @@ func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, erro
 // GetByID resolves an agent by id across all groups (used by the tick
 // engine, which is unscoped).
 func (m *Manager) GetByID(ctx context.Context, id string) (Agent, error) {
-	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, talon_source,
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
 		triggers_json, enabled, created_at, updated_at FROM agents WHERE id = ? LIMIT 1`)
 	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -422,7 +422,7 @@ func (m *Manager) WebhookAgent(ctx context.Context, userID, idOrName string) (Ag
 	if userID == "" || idOrName == "" {
 		return Agent{}, ErrNotFound
 	}
-	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, talon_source,
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
 		triggers_json, enabled, created_at, updated_at FROM agents
 		WHERE enabled = 1 AND entity_id = ? AND (id = ? OR name = ?) LIMIT 1`)
 	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, userID, idOrName, idOrName))
@@ -505,7 +505,7 @@ func scanAgent(s scanner) (Agent, error) {
 		created  string
 		updated  string
 	)
-	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TalonSource,
+	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TlnSource,
 		&triggers, &enabled, &created, &updated); err != nil {
 		return Agent{}, err
 	}

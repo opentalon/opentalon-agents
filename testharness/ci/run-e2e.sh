@@ -158,7 +158,7 @@ start_host
 
 # First poll must observe the pre-drop stock (15) so a snapshot is established;
 # only then does a later drop read as a downward crossing. The host clones and
-# builds console/talon/mcp plugins on first run, so allow a generous window
+# builds console/tln/mcp plugins on first run, so allow a generous window
 # (real-llm also needs the model to author the agent first).
 echo "== waiting for first get_item on $BARCODE =="
 wait_for_log "get_item $BARCODE" 360
@@ -193,7 +193,7 @@ echo "agents(stock-abc)=$acount"
 
 # Issue #28: the same firing must also PUSH a message to the creator's
 # conversation, via the host's _notify entrypoint — no address baked into the
-# Talon source.
+# Tln source.
 #
 # Deterministic mode seeds the notification with a sentinel template, so the
 # message text itself is asserted (delivered AND rendered with the observed

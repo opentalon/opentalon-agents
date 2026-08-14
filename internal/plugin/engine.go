@@ -15,14 +15,14 @@ import (
 
 // Engine drives the autonomous watchers. On each tick it sweeps the agents
 // whose poll trigger is due and, for each, polls the source, maps the
-// result to facts, evaluates the agent's Talon reactively (via
-// talon-plugin), and persists the resulting snapshot / schedule / run.
+// result to facts, evaluates the agent's Tln reactively (via
+// tln-plugin), and persists the resulting snapshot / schedule / run.
 // It lives here (not in package agent) because it needs the live
-// HostCaller and the talon proxy alongside the Manager.
+// HostCaller and the tln proxy alongside the Manager.
 type Engine struct {
 	cfg    *config.Config
 	mgr    *agent.Manager
-	talon  talonProxy
+	tln    tlnProxy
 	esc    escalator
 	notify notifier
 }
@@ -32,7 +32,7 @@ func NewEngine(cfg *config.Config, mgr *agent.Manager) *Engine {
 	return &Engine{
 		cfg:    cfg,
 		mgr:    mgr,
-		talon:  talonProxy{pluginName: cfg.TalonPluginName},
+		tln:    tlnProxy{pluginName: cfg.TlnPluginName},
 		esc:    escalator{pluginName: cfg.EscalationPluginName},
 		notify: notifier{pluginName: cfg.NotifyPluginName},
 	}
@@ -77,7 +77,7 @@ func (e *Engine) tickAt(ctx context.Context, host pkg.HostCaller, now time.Time)
 }
 
 // sweepSchedules runs every enabled schedule (cron) agent that is due. A
-// schedule agent runs its Talon as a one-shot workflow (execute_workflow)
+// schedule agent runs its Tln as a one-shot workflow (execute_workflow)
 // on its cron cadence — no facts/snapshot involved.
 func (e *Engine) sweepSchedules(ctx context.Context, host pkg.HostCaller, now time.Time, res *TickResult) {
 	due, err := e.mgr.ListEnabledScheduleDue(ctx, now)
@@ -122,7 +122,7 @@ func (e *Engine) scheduleAgent(ctx context.Context, host pkg.HostCaller, a agent
 	}
 
 	// Due: run the workflow, then reschedule (regardless of run outcome).
-	result, runErr := e.talon.Run(ctx, host, a.TalonSource)
+	result, runErr := e.tln.Run(ctx, host, a.TlnSource)
 	next := sched.Next(now)
 	state.NextCronAt = &next
 	if err := e.mgr.SaveState(ctx, state); err != nil {
@@ -197,7 +197,7 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if err != nil {
 		return 0, err
 	}
-	evalRes, err := e.talon.Evaluate(ctx, host, a.TalonSource, factsJSON, state.FactsSnapshot)
+	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, factsJSON, state.FactsSnapshot)
 	if err != nil {
 		return 0, err
 	}
@@ -245,7 +245,7 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
 	}
-	evalRes, err := e.talon.Evaluate(ctx, host, a.TalonSource, factsJSON, state.FactsSnapshot)
+	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, factsJSON, state.FactsSnapshot)
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
 	}

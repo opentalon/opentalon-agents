@@ -13,7 +13,7 @@ import (
 	"github.com/opentalon/opentalon-agents/internal/agent"
 )
 
-// notifyHost scripts a poll, talon-plugin.evaluate, and the host's _notify.send
+// notifyHost scripts a poll, tln-plugin.evaluate, and the host's _notify.send
 // entrypoint, capturing every send so tests can assert the delivery args.
 type notifyHost struct {
 	stock    []float64

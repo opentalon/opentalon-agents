@@ -52,14 +52,14 @@ func TestListEnabledScheduleDue(t *testing.T) {
 	m := testManager(t)
 	now := time.Now().UTC()
 
-	due := mustCreate(t, m, Agent{Name: "cron", GroupID: "g1", TalonSource: `workflow "x" {}`, Enabled: true, Triggers: []Trigger{schedTrigger("*/5 * * * *")}})
-	notDue := mustCreate(t, m, Agent{Name: "cron2", GroupID: "g1", TalonSource: `workflow "x" {}`, Enabled: true, Triggers: []Trigger{schedTrigger("*/5 * * * *")}})
+	due := mustCreate(t, m, Agent{Name: "cron", GroupID: "g1", TlnSource: `workflow "x" {}`, Enabled: true, Triggers: []Trigger{schedTrigger("*/5 * * * *")}})
+	notDue := mustCreate(t, m, Agent{Name: "cron2", GroupID: "g1", TlnSource: `workflow "x" {}`, Enabled: true, Triggers: []Trigger{schedTrigger("*/5 * * * *")}})
 	future := now.Add(time.Hour)
 	if err := m.SaveState(ctx, AgentState{AgentID: notDue.ID, NextCronAt: &future}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	// A poll-only agent must not appear in the schedule sweep.
-	mustCreate(t, m, Agent{Name: "poll", GroupID: "g1", TalonSource: `workflow "x" {}`, Enabled: true, Triggers: []Trigger{{Type: TriggerPoll, Config: json.RawMessage(pollCfg)}}})
+	mustCreate(t, m, Agent{Name: "poll", GroupID: "g1", TlnSource: `workflow "x" {}`, Enabled: true, Triggers: []Trigger{{Type: TriggerPoll, Config: json.RawMessage(pollCfg)}}})
 
 	got, err := m.ListEnabledScheduleDue(ctx, now)
 	if err != nil {

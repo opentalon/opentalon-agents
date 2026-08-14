@@ -16,7 +16,7 @@ import (
 //
 // Notification is the cheap, model-free counterpart to escalation: when the
 // agent fires, the plugin PUSHES a message to the creator's conversation. No
-// LLM turn runs, and the destination is never baked into the Talon source —
+// LLM turn runs, and the destination is never baked into the Tln source —
 // it comes from the delivery context the host injected when the agent was
 // authored.
 type NotifySpec struct {

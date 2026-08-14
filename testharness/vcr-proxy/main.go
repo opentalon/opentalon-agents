@@ -10,10 +10,11 @@
 // same host build and prompt, the sequence and count of Complete calls is stable.
 //
 // Modes (VCR_MODE):
-//   record  forward each call to real Anthropic, capture the response, append to
-//           the cassette; write on shutdown. Requires ANTHROPIC_API_KEY.
-//   replay  serve cassette responses in order; no API key, no network. 500 on
-//           exhaustion or on a cassette-missing start.
+//
+//	record  forward each call to real Anthropic, capture the response, append to
+//	        the cassette; write on shutdown. Requires ANTHROPIC_API_KEY.
+//	replay  serve cassette responses in order; no API key, no network. 500 on
+//	        exhaustion or on a cassette-missing start.
 //
 // The cassette stores only response bodies plus a SHA-256 of each request body
 // (for drift diagnostics) — never the API key, never the raw request. On replay
@@ -21,11 +22,12 @@
 // host Player's request-agnostic behaviour.
 //
 // Env:
-//   VCR_MODE          record | replay          (default replay)
-//   VCR_CASSETTE      cassette path            (default ./cassette.json)
-//   ADDR              listen address           (default :8788)
-//   ANTHROPIC_BASE    upstream base            (default https://api.anthropic.com)
-//   ANTHROPIC_API_KEY real key                 (record mode only)
+//
+//	VCR_MODE          record | replay          (default replay)
+//	VCR_CASSETTE      cassette path            (default ./cassette.json)
+//	ADDR              listen address           (default :8788)
+//	ANTHROPIC_BASE    upstream base            (default https://api.anthropic.com)
+//	ANTHROPIC_API_KEY real key                 (record mode only)
 package main
 
 import (

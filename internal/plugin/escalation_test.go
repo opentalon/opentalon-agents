@@ -16,7 +16,7 @@ import (
 	"github.com/opentalon/opentalon-agents/internal/store"
 )
 
-// escHost scripts a poll (get-item), talon-plugin.evaluate, and the host's
+// escHost scripts a poll (get-item), tln-plugin.evaluate, and the host's
 // _escalate.turn entrypoint, capturing every turn call so tests can assert the
 // escalation args.
 type escHost struct {
@@ -68,7 +68,7 @@ func escWatcher(t *testing.T, mgr *agent.Manager) agent.Agent {
 	a, err := mgr.Create(context.Background(), agent.Agent{
 		Name: "restock", GroupID: "g1", EntityID: "ent-1", Enabled: true,
 		Description: "watch ABC-123 stock and tell me when it's low",
-		TalonSource: `on change attr "current_stock" { when prev_value >= 10 and new_value < 10 workflow "Refill stock" }`,
+		TlnSource:   `on change attr "current_stock" { when prev_value >= 10 and new_value < 10 workflow "Refill stock" }`,
 		Triggers:    []agent.Trigger{{Type: agent.TriggerPoll, Config: json.RawMessage(pc)}},
 	})
 	if err != nil {

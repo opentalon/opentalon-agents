@@ -14,7 +14,7 @@ import (
 // context the caller wants injected.
 func createWithNotify(t *testing.T, h *Handler, name, notify string, delivery map[string]string) pkg.Response {
 	t.Helper()
-	args := ctxArgs(map[string]string{"name": name, "talon_source": `workflow "ok" {}`, "notify": notify})
+	args := ctxArgs(map[string]string{"name": name, "tln_source": `workflow "ok" {}`, "notify": notify})
 	for k, v := range delivery {
 		args[k] = v
 	}
@@ -66,7 +66,7 @@ func TestCreate_NotifyRejectedWithoutDeliveryContext(t *testing.T) {
 
 func TestCreate_EscalateRejectedWithoutSession(t *testing.T) {
 	h := testHandler(t)
-	args := ctxArgs(map[string]string{"name": "restock", "talon_source": `workflow "ok" {}`, "escalate": "true"})
+	args := ctxArgs(map[string]string{"name": "restock", "tln_source": `workflow "ok" {}`, "escalate": "true"})
 	resp := h.ExecuteWithCallbacks(context.Background(), pkg.Request{ID: "c1", Action: "create", Args: args}, &fakeHost{})
 	if resp.Error == "" {
 		t.Fatal("expected escalate.enabled with no session to be rejected")
@@ -103,7 +103,7 @@ func TestUpdate_EnablingNotifyReusesCapturedTarget(t *testing.T) {
 	// Later update carries no delivery context, but the create-time target is
 	// still on file, so enabling is allowed and keeps addressing it.
 	resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "u1", Action: "update", Args: ctxArgs(map[string]string{
-		"id": "restock", "talon_source": `workflow "ok2" {}`, "notify": "true",
+		"id": "restock", "tln_source": `workflow "ok2" {}`, "notify": "true",
 	})}, &fakeHost{})
 	if resp.Error != "" {
 		t.Fatalf("update: %q", resp.Error)
@@ -150,7 +150,7 @@ func TestShow_ReportsEscalationWithoutLeakingTheSession(t *testing.T) {
 	ctx := context.Background()
 	h := testHandler(t)
 	args := ctxArgs(map[string]string{
-		"name": "restock", "talon_source": `workflow "ok" {}`,
+		"name": "restock", "tln_source": `workflow "ok" {}`,
 		"escalate": "true", "session_id": "u1:telegram:42",
 	})
 	if resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "c1", Action: "create", Args: args}, &fakeHost{}); resp.Error != "" {

@@ -1,4 +1,4 @@
-// Package agent holds the domain model for persistent, LLM-authored Talon
+// Package agent holds the domain model for persistent, LLM-authored Tln
 // workflow agents and the CRUD manager over the store.
 package agent
 
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Agent is one persistent automation: a stored Talon program plus the
+// Agent is one persistent automation: a stored Tln program plus the
 // triggers that fire it. In Phase 1 only manual/llm `run` is wired;
 // schedule/poll/webhook triggers are stored but not yet acted on.
 type Agent struct {
@@ -17,7 +17,7 @@ type Agent struct {
 	Description string    `json:"description,omitempty"`
 	GroupID     string    `json:"group_id"`
 	EntityID    string    `json:"entity_id,omitempty"`
-	TalonSource string    `json:"talon_source"`
+	TlnSource   string    `json:"tln_source"`
 	Triggers    []Trigger `json:"triggers,omitempty"`
 	Enabled     bool      `json:"enabled"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -183,7 +183,7 @@ func (rc RunContext) Delivery() DeliveryTarget {
 }
 
 // AgentSummary is the list-view of an agent — everything but the full
-// Talon source. Returned by the query API.
+// Tln source. Returned by the query API.
 type AgentSummary struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
@@ -195,7 +195,7 @@ type AgentSummary struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// Summary returns the agent's list-view (omits the Talon source).
+// Summary returns the agent's list-view (omits the Tln source).
 func (a Agent) Summary() AgentSummary {
 	types := make([]string, 0, len(a.Triggers))
 	for _, t := range a.Triggers {
@@ -220,11 +220,11 @@ type AgentFilter struct {
 // AgentState is the restart-safe watcher state for one agent (Phase 2),
 // stored one row per agent in the agent_state table.
 //
-//   - FactsSnapshot is the Talon Session snapshot ({"<int>":{attr:val}}),
+//   - FactsSnapshot is the Tln Session snapshot ({"<int>":{attr:val}}),
 //     carried between ticks so an unchanged value fires nothing and a
 //     restart replays without re-firing.
 //   - EntityMap maps external ids (e.g. a barcode) to the small integer
-//     entity ids Talon snapshots are keyed by. It MUST persist so the
+//     entity ids Tln snapshots are keyed by. It MUST persist so the
 //     same external entity keeps the same int across ticks/restarts.
 //   - NextPollAt / NextCronAt are the due-times the engine schedules.
 //   - ConsecutiveFailures drives poll backoff.

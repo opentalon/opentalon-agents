@@ -27,7 +27,7 @@ func TestWebhookAgent_ScopedByUser(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
 	a, err := m.Create(ctx, Agent{Name: "restock", GroupID: "g1", EntityID: "u1", Enabled: true,
-		TalonSource: `workflow "x" {}`, Triggers: []Trigger{webhookTrigger()}})
+		TlnSource: `workflow "x" {}`, Triggers: []Trigger{webhookTrigger()}})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestWebhookAgent_ScopedByUser(t *testing.T) {
 	}
 	// An agent without a webhook trigger is not resolvable here.
 	mustCreate(t, m, Agent{Name: "manual", GroupID: "g1", EntityID: "u1", Enabled: true,
-		TalonSource: `workflow "x" {}`, Triggers: []Trigger{{Type: TriggerManual}}})
+		TlnSource: `workflow "x" {}`, Triggers: []Trigger{{Type: TriggerManual}}})
 	if _, err := m.WebhookAgent(ctx, "u1", "manual"); err != ErrNotFound {
 		t.Errorf("non-webhook agent: got %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPendingEvents_Queue(t *testing.T) {
 func TestGetByID(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, _ := m.Create(ctx, Agent{Name: "x", GroupID: "g1", TalonSource: `workflow "x" {}`})
+	a, _ := m.Create(ctx, Agent{Name: "x", GroupID: "g1", TlnSource: `workflow "x" {}`})
 	got, err := m.GetByID(ctx, a.ID)
 	if err != nil || got.Name != "x" {
 		t.Errorf("GetByID: %v %+v", err, got)
