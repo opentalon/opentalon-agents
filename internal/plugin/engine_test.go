@@ -17,7 +17,7 @@ import (
 )
 
 // engineHost fakes both sides of a tick: the inventory poll (get-item)
-// returns the next scripted stock value; talon-plugin.evaluate returns the
+// returns the next scripted stock value; tln-plugin.evaluate returns the
 // next scripted result and records the args it received (so tests can
 // assert the prior snapshot was forwarded).
 type engineHost struct {
@@ -64,8 +64,8 @@ func watcherAgent(t *testing.T, mgr *agent.Manager) agent.Agent {
 	pc := `{"server":"inventory","tool":"get-item","args":{"barcode":"ABC-123"},"interval":"5m","value_path":"item.current_stock","id_field":"item.barcode","attribute":"current_stock"}`
 	a, err := mgr.Create(context.Background(), agent.Agent{
 		Name: "restock", GroupID: "g1", Enabled: true,
-		TalonSource: `on change attr "current_stock" { when prev_value >= 10 and new_value < 10 workflow "Refill stock" }`,
-		Triggers:    []agent.Trigger{{Type: agent.TriggerPoll, Config: json.RawMessage(pc)}},
+		TlnSource: `on change attr "current_stock" { when prev_value >= 10 and new_value < 10 workflow "Refill stock" }`,
+		Triggers:  []agent.Trigger{{Type: agent.TriggerPoll, Config: json.RawMessage(pc)}},
 	})
 	if err != nil {
 		t.Fatalf("create agent: %v", err)

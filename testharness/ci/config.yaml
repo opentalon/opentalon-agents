@@ -7,7 +7,7 @@
 # Runs inside the published host container with `--network host`, so every
 # `localhost` below is the CI runner's network namespace:
 #   - postgres        service container, :5432 (behind the testharness MCP)
-#   - datalevin-server :8898 (talon-plugin backend)
+#   - datalevin-server :8898 (tln-plugin backend)
 #   - testharness MCP  :8765 (bridged by mcp-plugin)
 #   - vcr-proxy        :8788 (Anthropic record/replay; empty base_url in
 #                             deterministic mode, which never calls the LLM)
@@ -68,15 +68,15 @@ plugins:
     plugin: "/work/bin/opentalon-agents"
     config:
       db: { driver: sqlite, dsn: /work/agents.db }
-      talon_plugin_name: talon-plugin
+      tln_plugin_name: tln-plugin
       # Honored only by the `-tags dev` build (console has no profile → no
       # group_id); CI builds the plugin with that tag.
       default_group_id: default
 
-  talon-plugin:
+  tln-plugin:
     enabled: true
-    github: opentalon/talon-plugin
-    ref: v0.2.0
+    github: opentalon/tln-plugin
+    ref: v0.3.0
     config:
       datalevin_url: "http://localhost:8898"
 

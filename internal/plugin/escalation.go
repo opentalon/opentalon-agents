@@ -19,7 +19,7 @@ import (
 const escalateTurnAction = "turn"
 
 // escalator reaches the host's background-turn entrypoint. It is the escalation
-// analogue of talonProxy: the plugin's whole coupling to the escalation
+// analogue of tlnProxy: the plugin's whole coupling to the escalation
 // capability is this one RunAction call.
 type escalator struct {
 	pluginName string

@@ -18,11 +18,11 @@ testharness/
 
 ```
 console (you type)
-  -> host + LLM  -> agents.create (Talon source + poll trigger)
+  -> host + LLM  -> agents.create (Tln source + poll trigger)
 scheduler.tick (1m)
   -> agents.tick -> poll: host.RunAction("mcp","testdb__get_item",{barcode})
                       -> mcp-plugin -> testharness MCP -> Postgres
-                    map value_path -> fact -> talon-plugin.evaluate
+                    map value_path -> fact -> tln-plugin.evaluate
                     on downward crossing < 10 -> workflow ->
                       host.RunAction("mcp","testdb__create_ticket",{barcode,qty})
                       -> Postgres tickets row
@@ -65,14 +65,14 @@ cd testharness/mcp && go run .   # listens :8765, SSE at /sse
 Override the port with `ADDR=:9000` (update your host config's url to match).
 
 **4. Write the host config.** Use `ci/config.yaml` as a template (it wires the
-console channel + agents/talon/mcp plugins + `agents-tick` scheduler). For a
+console channel + agents/tln/mcp plugins + `agents-tick` scheduler). For a
 local run, swap the `/work/...` paths for your local paths and drop the
 container-only `state:`/`log:` blocks.
 
 **5. Start the host:**
 ```
 cd ../opentalon
-make build            # host binary; clones+builds console/talon/mcp plugins on first run
+make build            # host binary; clones+builds console/tln/mcp plugins on first run
 ./opentalon -config config.yaml
 ```
 
@@ -82,7 +82,7 @@ In the console, author the watcher:
 
 > Create an agent named stock-abc that watches inventory item barcode ABC-123 and opens a refill ticket for 50 units when its stock drops below 10. Poll the `mcp` server tool `testdb__get_item` with arg barcode=ABC-123 every 1 minute; the stock value is at `current_stock`.
 
-The LLM calls `agents.create` (validated via `talon-plugin.check`). First tick
+The LLM calls `agents.create` (validated via `tln-plugin.check`). First tick
 polls stock=15 → no fire (edge-triggered). Now cross the threshold:
 
 ```
@@ -111,7 +111,7 @@ the host. Three jobs:
   then drives tick → drop stock → assert one ticket. Reliable.
 - **vcr-replay** (PR, label-gated) — pipes the authoring prompt to the console;
   the host calls Anthropic, but its `base_url` points at the **vcr-proxy**
-  replaying `ci/cassette.json`. Real authoring path (chat → LLM → Talon agent),
+  replaying `ci/cassette.json`. Real authoring path (chat → LLM → Tln agent),
   deterministic, **no secret**. Same tick → drop → assert. Opt-in because it's
   slow (see below).
 - **cassette-check** (PR gate) — fast, no stack: fails if the committed
@@ -131,7 +131,7 @@ Beyond the ticket, `run-e2e.sh` asserts the authoring leg directly against
 
 ### Running vcr-replay on a PR
 
-`vcr-replay` builds the host image and clones/builds the console/talon/mcp
+`vcr-replay` builds the host image and clones/builds the console/tln/mcp
 plugins, so it takes several minutes — too slow for every PR. It's **opt-in via
 the `e2e-vcr` label**:
 
@@ -145,7 +145,7 @@ the `e2e-vcr` label**:
   tab, and the nightly schedule runs `vcr-record`.
 
 All three stand up Postgres, **datalevin-server** (from the
-`opentalon/talon-language` repo — talon-plugin's backend at `:8898`) and the MCP
+`opentalon/tln-language` repo — tln-plugin's backend at `:8898`) and the MCP
 server, mount the plugin binary + rendered `ci/config.yaml` into the container,
 and run `ci/run-e2e.sh`.
 

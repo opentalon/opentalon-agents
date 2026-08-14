@@ -14,8 +14,8 @@ func webhookAgent(t *testing.T, mgr *agent.Manager) agent.Agent {
 	wc := `{"value_path":"stock","id_field":"barcode","attribute":"current_stock"}`
 	a, err := mgr.Create(context.Background(), agent.Agent{
 		Name: "restock", GroupID: "g1", EntityID: "u1", Enabled: true,
-		TalonSource: `on change attr "current_stock" { when prev_value >= 10 and new_value < 10 workflow "Refill stock" }`,
-		Triggers:    []agent.Trigger{{Type: agent.TriggerWebhook, Config: json.RawMessage(wc)}},
+		TlnSource: `on change attr "current_stock" { when prev_value >= 10 and new_value < 10 workflow "Refill stock" }`,
+		Triggers:  []agent.Trigger{{Type: agent.TriggerWebhook, Config: json.RawMessage(wc)}},
 	})
 	if err != nil {
 		t.Fatalf("create webhook agent: %v", err)

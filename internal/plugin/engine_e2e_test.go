@@ -12,7 +12,7 @@ import (
 )
 
 // simHost is a higher-fidelity fake than engineHost: its `evaluate`
-// actually simulates Talon's crossing semantics (fire when prev >= 10 and
+// actually simulates Tln's crossing semantics (fire when prev >= 10 and
 // new < 10, based on the snapshot it is given), and it records a "ticket"
 // each time the fired workflow would run. This lets the test exercise the
 // engine's real per-tick state round-trip end to end. `stock` is what the

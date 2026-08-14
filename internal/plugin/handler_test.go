@@ -14,7 +14,7 @@ import (
 	"github.com/opentalon/opentalon-agents/internal/store"
 )
 
-// fakeHost implements pkg.HostCaller with scripted talon-plugin replies.
+// fakeHost implements pkg.HostCaller with scripted tln-plugin replies.
 // check(): invalid when the source contains "INVALID"; valid otherwise.
 // execute_workflow(): records the call and returns a canned result.
 type fakeHost struct {
@@ -26,7 +26,7 @@ func (f *fakeHost) RunAction(_ context.Context, plugin, action string, args map[
 	case "check":
 		if strings.Contains(args["workflow"], "INVALID") {
 			return pkg.CallResult{
-				Content:           "talon: parse: 1 diagnostic(s)\n  unexpected token",
+				Content:           "tln: parse: 1 diagnostic(s)\n  unexpected token",
 				StructuredContent: `{"ok":false,"stage":"parse"}`,
 			}, nil
 		}
@@ -64,7 +64,7 @@ func TestCreate_ValidSourcePersists(t *testing.T) {
 	host := &fakeHost{}
 	resp := h.ExecuteWithCallbacks(context.Background(), pkg.Request{
 		ID: "c1", Action: "create",
-		Args: ctxArgs(map[string]string{"name": "restock", "talon_source": `workflow "ok" {}`}),
+		Args: ctxArgs(map[string]string{"name": "restock", "tln_source": `workflow "ok" {}`}),
 	}, host)
 	if resp.Error != "" {
 		t.Fatalf("create should succeed: %q", resp.Error)
@@ -80,7 +80,7 @@ func TestCreate_InvalidSourceRejectedAndNotPersisted(t *testing.T) {
 	host := &fakeHost{}
 	resp := h.ExecuteWithCallbacks(context.Background(), pkg.Request{
 		ID: "c1", Action: "create",
-		Args: ctxArgs(map[string]string{"name": "bad", "talon_source": "INVALID {"}),
+		Args: ctxArgs(map[string]string{"name": "bad", "tln_source": "INVALID {"}),
 	}, host)
 	if resp.Error == "" {
 		t.Fatal("invalid source should be rejected")
@@ -100,7 +100,7 @@ func TestRun_IssuesOneExecuteWorkflowWithStoredSource(t *testing.T) {
 	src := `workflow "restock" { step "s" { mcp "inv" "refill" { id "1" } } }`
 	if resp := h.ExecuteWithCallbacks(context.Background(), pkg.Request{
 		ID: "c1", Action: "create",
-		Args: ctxArgs(map[string]string{"name": "restock", "talon_source": src}),
+		Args: ctxArgs(map[string]string{"name": "restock", "tln_source": src}),
 	}, host); resp.Error != "" {
 		t.Fatalf("create: %q", resp.Error)
 	}
@@ -126,7 +126,7 @@ func TestExecute_RequiresCallbacks(t *testing.T) {
 	}
 }
 
-// TestConfigureDuringTick_NoRace catches the data race on the engine/talon
+// TestConfigureDuringTick_NoRace catches the data race on the engine/tln
 // fields that Configure swaps out from under an in-flight action. Only
 // meaningful under -race.
 func TestConfigureDuringTick_NoRace(t *testing.T) {
@@ -143,7 +143,7 @@ func TestConfigureDuringTick_NoRace(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 50; i++ {
-			if err := h.Configure(`{"talon_plugin_name":"talon"}`); err != nil {
+			if err := h.Configure(`{"tln_plugin_name":"tln"}`); err != nil {
 				t.Errorf("configure: %v", err)
 				return
 			}

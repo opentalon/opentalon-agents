@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// Fact is one asserted fact, serialized to the shape talon-plugin's
+// Fact is one asserted fact, serialized to the shape tln-plugin's
 // `evaluate` action expects: {"record_id","attribute","value"}. RecordID
-// is the integer entity id (as a string) — Talon snapshots are keyed by
+// is the integer entity id (as a string) — Tln snapshots are keyed by
 // int, so external ids are mapped through the per-agent registry first.
 type Fact struct {
 	RecordID  string `json:"record_id"`
@@ -98,7 +98,7 @@ func MapValue(valuePath, idField, attribute string, response any, registry map[s
 // assignEntityID returns the stable int id for an external id, assigning a
 // fresh one (max+1, starting at 1) on first sight. The registry MUST
 // persist so the same external entity keeps the same int across ticks and
-// restarts (Talon snapshots are int-keyed).
+// restarts (Tln snapshots are int-keyed).
 func assignEntityID(reg map[string]int, ext string) int {
 	if id, ok := reg[ext]; ok {
 		return id

@@ -9,7 +9,7 @@ import (
 	pkg "github.com/opentalon/opentalon/pkg/plugin"
 )
 
-// evalHost scripts talon-plugin.evaluate and records the args it received.
+// evalHost scripts tln-plugin.evaluate and records the args it received.
 type evalHost struct {
 	lastArgs map[string]string
 	result   string
@@ -29,7 +29,7 @@ func (h *evalHost) RunAction(_ context.Context, _, action string, args map[strin
 
 func TestEvaluate_ParsesFiringsAndSnapshotAndForwardsArgs(t *testing.T) {
 	host := &evalHost{result: `{"ok":true,"firings":[{"on_block":"on change attr \"current_stock\"","ref":"Refill stock","ref_kind":"workflow"}],"snapshot":{"1":{"current_stock":8}}}`}
-	p := talonProxy{pluginName: "talon-plugin"}
+	p := tlnProxy{pluginName: "tln-plugin"}
 
 	facts := json.RawMessage(`[{"record_id":"1","attribute":"current_stock","value":8}]`)
 	snap := json.RawMessage(`{"1":{"current_stock":15}}`)
@@ -51,7 +51,7 @@ func TestEvaluate_ParsesFiringsAndSnapshotAndForwardsArgs(t *testing.T) {
 
 func TestEvaluate_DefaultsEmptyFacts(t *testing.T) {
 	host := &evalHost{result: `{"ok":true,"firings":[],"snapshot":{}}`}
-	p := talonProxy{pluginName: "talon-plugin"}
+	p := tlnProxy{pluginName: "tln-plugin"}
 	if _, err := p.Evaluate(context.Background(), host, "SRC", nil, nil); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
@@ -64,8 +64,8 @@ func TestEvaluate_DefaultsEmptyFacts(t *testing.T) {
 }
 
 func TestEvaluate_HostError(t *testing.T) {
-	host := &evalHost{err: errors.New("talon-plugin not loaded")}
-	p := talonProxy{pluginName: "talon-plugin"}
+	host := &evalHost{err: errors.New("tln-plugin not loaded")}
+	p := tlnProxy{pluginName: "tln-plugin"}
 	if _, err := p.Evaluate(context.Background(), host, "SRC", nil, nil); err == nil {
 		t.Error("expected error when the evaluate action fails")
 	}

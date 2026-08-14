@@ -1,13 +1,13 @@
-Persistent agents: automations the user describes in chat, that you author ONCE in the Talon language and store here. They then run deterministically and autonomously — no model in the loop at run time.
+Persistent agents: automations the user describes in chat, that you author ONCE in the Tln language and store here. They then run deterministically and autonomously — no model in the loop at run time.
 
 Actions (all scoped to the current group):
-- create(name, description, talon_source, [triggers]) — author a new agent. Set `description` to the USER'S ORIGINAL REQUEST in their own words (what they asked for), not a paraphrase of the Talon — this is how the human intent is preserved. Ask for a short name if they didn't give one. talon_source is validated before storing; if invalid you get compile diagnostics back — fix and retry.
-- list / show(id) — inspect agents (show returns the full Talon source).
+- create(name, description, tln_source, [triggers]) — author a new agent. Set `description` to the USER'S ORIGINAL REQUEST in their own words (what they asked for), not a paraphrase of the Tln — this is how the human intent is preserved. Ask for a short name if they didn't give one. tln_source is validated before storing; if invalid you get compile diagnostics back — fix and retry.
+- list / show(id) — inspect agents (show returns the full Tln source).
 - run(id) — execute an agent's program now and return the result (good for testing).
-- update(id, talon_source, [triggers]) — replace the program/triggers (re-validated).
+- update(id, tln_source, [triggers]) — replace the program/triggers (re-validated).
 - enable(id) / disable(id) / delete(id) — lifecycle.
 
-For Talon syntax (workflows, on-blocks, `when`, facts, mcp steps, step("...").result), follow the Talon-language guidance from the talon plugin — it is authoritative. This section is about assembling an AGENT.
+For Tln syntax (workflows, on-blocks, `when`, facts, mcp steps, step("...").result), follow the Tln-language guidance from the tln plugin — it is authoritative. This section is about assembling an AGENT.
 
 TWO KINDS OF AGENT
 1. One-shot / batch — a plain `workflow` you trigger with run(id), or on a cron via a `schedule` trigger: [{"type":"schedule","cron":"0 9 * * 1-5"}] (standard 5-field cron, MINUTE granularity — no seconds field; never write a 6-field cron. For sub-minute cadence use a `poll` trigger with an interval like "30s" instead). Good for "do X every morning / across N items now".
@@ -16,7 +16,7 @@ TWO KINDS OF AGENT
 AUTHORING A WATCHER
 A watcher has two parts you provide together:
 
-(a) talon_source — an `on change attr "<attr>"` block guarded by a `when`, firing a workflow that does the action. Use the fire-ONCE crossing guard so it acts on the transition, not every tick:
+(a) tln_source — an `on change attr "<attr>"` block guarded by a `when`, firing a workflow that does the action. Use the fire-ONCE crossing guard so it acts on the transition, not every tick:
 
   on change attr "current_stock" {
     when prev_value >= 10 and new_value < 10
@@ -31,7 +31,7 @@ A watcher has two parts you provide together:
     }
   }
 
-The `poll` trigger does the FETCHING — do NOT call the polling MCP tool inside talon_source, and do NOT write a bare level check like `on current_stock < 10`. The engine polls the value and feeds it in as the fact your `on change attr` block watches; the only `mcp` step in talon_source is the ACTION taken when the block fires (here, creating the ticket). Author exactly a create(talon_source, triggers) — never a `pipeline` or other free-form structure, and never an `interval` trigger for a watcher (that is for schedules, not watched values).
+The `poll` trigger does the FETCHING — do NOT call the polling MCP tool inside tln_source, and do NOT write a bare level check like `on current_stock < 10`. The engine polls the value and feeds it in as the fact your `on change attr` block watches; the only `mcp` step in tln_source is the ACTION taken when the block fires (here, creating the ticket). Author exactly a create(tln_source, triggers) — never a `pipeline` or other free-form structure, and never an `interval` trigger for a watcher (that is for schedules, not watched values).
 
 (b) triggers — a JSON array with a `poll` entry telling the engine WHAT to fetch each interval and HOW to turn it into the fact the on-block watches:
 
@@ -59,7 +59,7 @@ Instead of polling, an external system can PUSH data. Use a `webhook` trigger �
 The system then POSTs the data to `/v1/hooks/<agent-name>?user_id=<the user>` with header `Authorization: Bearer <webhook_secret>` (a shared secret the operator configures). The body is mapped to a fact exactly like a poll and evaluated on the next tick. Tell the user this URL if they want to drive the agent by webhook.
 
 ESCALATION (fire → investigate → ask the user)
-By default a watcher's reaction is a FIXED Talon action (the `mcp` step in its workflow), decided when you author it — no model at run time. Some tasks instead need judgement WHEN they fire: "stock is trending down — which items are at risk, and should I reorder or just alert you?". For those, opt the agent into escalation with the `escalate` argument on create/update:
+By default a watcher's reaction is a FIXED Tln action (the `mcp` step in its workflow), decided when you author it — no model at run time. Some tasks instead need judgement WHEN they fire: "stock is trending down — which items are at risk, and should I reorder or just alert you?". For those, opt the agent into escalation with the `escalate` argument on create/update:
 
   escalate: {"enabled":true}
   # or, with options:
@@ -69,7 +69,7 @@ When an escalation-enabled watcher fires, instead of only running its fixed acti
 
 Guidance:
 - Escalation is OPT-IN and costs tokens (it runs a real LLM turn), so use it only when the firing genuinely needs judgement or a question back to the user. For a deterministic fixed reaction, author a normal workflow action and leave escalate off.
-- Detection still stays deterministic: author the SAME `on change attr` + `poll`/`webhook` watcher. `escalate` only changes the REACTION. You still provide a talon_source; keep its workflow minimal (or a no-op notify) when the real work is the escalation turn.
+- Detection still stays deterministic: author the SAME `on change attr` + `poll`/`webhook` watcher. `escalate` only changes the REACTION. You still provide a tln_source; keep its workflow minimal (or a no-op notify) when the real work is the escalation turn.
 - It is rate-limited (max_per_window / window_seconds; 0 = server default) and edge-triggered (fires on the crossing, not every tick), so a persisting condition won't spam the user.
 - prompt_template optionally overrides the seed prompt; placeholders: {{agent_name}}, {{description}}, {{firings}}, {{facts}}.
 - Escalation needs an interactive session to address the turn to — author it from the user's chat (enabling it from a non-interactive context with no known session is rejected).
@@ -87,7 +87,7 @@ NEVER hardcode a chat/channel/user id and NEVER author an `mcp "<channel>" "send
 
 - notify vs escalate: `notify` PUSHES a fixed message (free, deterministic, no model). `escalate` starts a real assistant TURN that investigates and can ask a question (costs tokens, rate-limited). "Tell me when stock drops" → notify. "Work out what's going on and check with me" → escalate. They are independent; an agent may use both, but don't set escalate when a plain message is what was asked for.
 - template placeholders: {{agent_name}}, {{description}}, {{firings}}, {{facts}}, {{result}} (schedule runs), {{error}} (failed runs), {{trigger}}. Leave template unset for a sensible default message.
-- A notify-only watcher still needs a valid talon_source — the `on change attr` block is what detects the crossing. Its workflow can be empty/minimal when the message IS the action.
+- A notify-only watcher still needs a valid tln_source — the `on change attr` block is what detects the crossing. Its workflow can be empty/minimal when the message IS the action.
 - Notification needs a conversation to deliver to — author it from the user's chat (enabling it from a non-interactive context with no known conversation is rejected).
 
 RULES
@@ -96,5 +96,5 @@ RULES
 - `schedule` cron is 5-field, minute granularity. There is NO seconds field — a 6-field cron is invalid and will be rejected. For anything faster than a minute, use a `poll` trigger with a sub-minute `interval` ("30s").
 - Keep one clear task per agent.
 - To message the user, use `notify` — never a hardcoded chat id or a channel `mcp` send step.
-- Do NOT put the polling MCP call inside talon_source and do NOT emit a `pipeline`. A watcher is always create(talon_source = `on change attr` + workflow, triggers = a `poll` entry). The workflow's `mcp` step is the fire action only.
-- Validate by create (invalid Talon is rejected with diagnostics) or by run(id).
+- Do NOT put the polling MCP call inside tln_source and do NOT emit a `pipeline`. A watcher is always create(tln_source = `on change attr` + workflow, triggers = a `poll` entry). The workflow's `mcp` step is the fire action only.
+- Validate by create (invalid Tln is rejected with diagnostics) or by run(id).

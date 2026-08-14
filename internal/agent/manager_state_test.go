@@ -85,19 +85,19 @@ func TestListEnabledPollDue(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Due: enabled, poll trigger, no state yet.
-	due, _ := m.Create(ctx, Agent{Name: "due", GroupID: "g1", TalonSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: true})
+	due, _ := m.Create(ctx, Agent{Name: "due", GroupID: "g1", TlnSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: true})
 	// Not due: enabled, poll trigger, next_poll_at in the future.
-	notDue, _ := m.Create(ctx, Agent{Name: "notdue", GroupID: "g1", TalonSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: true})
+	notDue, _ := m.Create(ctx, Agent{Name: "notdue", GroupID: "g1", TlnSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: true})
 	future := now.Add(time.Hour)
 	if err := m.SaveState(ctx, AgentState{AgentID: notDue.ID, NextPollAt: &future}); err != nil {
 		t.Fatalf("save notdue state: %v", err)
 	}
 	// Excluded: no poll trigger.
-	mustCreate(t, m, Agent{Name: "manual", GroupID: "g1", TalonSource: `workflow "x" {}`, Triggers: []Trigger{{Type: TriggerManual}}, Enabled: true})
+	mustCreate(t, m, Agent{Name: "manual", GroupID: "g1", TlnSource: `workflow "x" {}`, Triggers: []Trigger{{Type: TriggerManual}}, Enabled: true})
 	// Excluded: disabled (even though it has a poll trigger, in another group).
-	mustCreate(t, m, Agent{Name: "off", GroupID: "g2", TalonSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: false})
+	mustCreate(t, m, Agent{Name: "off", GroupID: "g2", TlnSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: false})
 	// Due in another group — the sweep is system-wide.
-	due2, _ := m.Create(ctx, Agent{Name: "due2", GroupID: "g2", TalonSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: true})
+	due2, _ := m.Create(ctx, Agent{Name: "due2", GroupID: "g2", TlnSource: `workflow "x" {}`, Triggers: []Trigger{pollTrigger()}, Enabled: true})
 
 	got, err := m.ListEnabledPollDue(ctx, now)
 	if err != nil {

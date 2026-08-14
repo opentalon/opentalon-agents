@@ -5,7 +5,7 @@
 -- untouched and the engine loads it lazily, only when an agent actually fires.
 --
 -- The delivery target is captured from the host-injected context args of the
--- create/update call, NOT from the Talon source — the LLM never sees or bakes
+-- create/update call, NOT from the Tln source — the LLM never sees or bakes
 -- an address. session_id alone is usually enough (the host's packed session key
 -- carries channel+conversation), but channel_id/conversation_id are stored too
 -- when the host injects them, so a fire-time delivery never has to resolve the

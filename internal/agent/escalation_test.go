@@ -50,7 +50,7 @@ func TestParseEscalationSpec(t *testing.T) {
 func TestManager_EscalationRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	a, err := m.Create(ctx, Agent{Name: "w", GroupID: "g1", EntityID: "e1", TalonSource: "x"})
+	a, err := m.Create(ctx, Agent{Name: "w", GroupID: "g1", EntityID: "e1", TlnSource: "x"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

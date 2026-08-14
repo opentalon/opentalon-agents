@@ -64,7 +64,7 @@ func main() {
 		log.Fatalf("seed-agent: encode poll config: %v", err)
 	}
 
-	talon := fmt.Sprintf(`on change attr "current_stock" {
+	tln := fmt.Sprintf(`on change attr "current_stock" {
   when prev_value >= 10 and new_value < 10
   workflow "Refill stock for %s"
 }
@@ -83,7 +83,7 @@ workflow "Refill stock for %s" {
 		Description: fmt.Sprintf("Watch inventory item barcode %s and open a refill ticket for 50 units when its stock drops below 10", barcode),
 		GroupID:     "default",
 		EntityID:    "console:user",
-		TalonSource: talon,
+		TlnSource:   tln,
 		Triggers:    []agent.Trigger{{Type: agent.TriggerPoll, Config: json.RawMessage(pc)}},
 		Enabled:     true,
 	})

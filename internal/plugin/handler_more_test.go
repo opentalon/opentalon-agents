@@ -27,7 +27,7 @@ func (s *scriptHost) RunAction(_ context.Context, _, action string, _ map[string
 		if s.checkOK {
 			return pkg.CallResult{StructuredContent: `{"ok":true}`}, nil
 		}
-		return pkg.CallResult{Content: "talon: parse: bad", StructuredContent: `{"ok":false,"stage":"parse"}`}, nil
+		return pkg.CallResult{Content: "tln: parse: bad", StructuredContent: `{"ok":false,"stage":"parse"}`}, nil
 	case "execute_workflow":
 		s.execCalls++
 		if s.execErr != nil {
@@ -42,7 +42,7 @@ func create(t *testing.T, h *Handler, host pkg.HostCaller, name, src string) pkg
 	t.Helper()
 	return h.ExecuteWithCallbacks(context.Background(), pkg.Request{
 		ID: "c", Action: "create",
-		Args: ctxArgs(map[string]string{"name": name, "talon_source": src}),
+		Args: ctxArgs(map[string]string{"name": name, "tln_source": src}),
 	}, host)
 }
 
@@ -53,7 +53,7 @@ func TestCapabilities(t *testing.T) {
 		t.Errorf("name: %q", caps.Name)
 	}
 	if !caps.SupportsCallbacks {
-		t.Error("SupportsCallbacks must be true (needs live HostCaller to reach talon-plugin)")
+		t.Error("SupportsCallbacks must be true (needs live HostCaller to reach tln-plugin)")
 	}
 	if caps.SystemPromptAddition == "" {
 		t.Error("expected a system prompt addition")
@@ -77,23 +77,23 @@ func TestUpdate_ValidReplacesSource_InvalidRejected(t *testing.T) {
 
 	// Valid update replaces the source.
 	if resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "u1", Action: "update",
-		Args: ctxArgs(map[string]string{"id": "a", "talon_source": `workflow "v2" {}`})}, host); resp.Error != "" {
+		Args: ctxArgs(map[string]string{"id": "a", "tln_source": `workflow "v2" {}`})}, host); resp.Error != "" {
 		t.Fatalf("valid update: %q", resp.Error)
 	}
 	got, _ := h.mgr.Get(ctx, "g1", "a")
-	if got.TalonSource != `workflow "v2" {}` {
-		t.Errorf("source not updated: %q", got.TalonSource)
+	if got.TlnSource != `workflow "v2" {}` {
+		t.Errorf("source not updated: %q", got.TlnSource)
 	}
 
 	// Invalid update is rejected and leaves the source unchanged.
 	host.checkOK = false
 	if resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "u2", Action: "update",
-		Args: ctxArgs(map[string]string{"id": "a", "talon_source": `bad`})}, host); resp.Error == "" {
+		Args: ctxArgs(map[string]string{"id": "a", "tln_source": `bad`})}, host); resp.Error == "" {
 		t.Fatal("invalid update should be rejected")
 	}
 	got, _ = h.mgr.Get(ctx, "g1", "a")
-	if got.TalonSource != `workflow "v2" {}` {
-		t.Errorf("rejected update must not change source: %q", got.TalonSource)
+	if got.TlnSource != `workflow "v2" {}` {
+		t.Errorf("rejected update must not change source: %q", got.TlnSource)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestCreate_StoresUserRequestAsDescription(t *testing.T) {
 	host := &scriptHost{checkOK: true}
 	want := "watch stock ABC-123 and open a refill ticket when it drops below 10"
 	if resp := h.ExecuteWithCallbacks(ctx, pkg.Request{ID: "c", Action: "create",
-		Args: ctxArgs(map[string]string{"name": "restock", "description": want, "talon_source": `workflow "x" {}`})}, host); resp.Error != "" {
+		Args: ctxArgs(map[string]string{"name": "restock", "description": want, "tln_source": `workflow "x" {}`})}, host); resp.Error != "" {
 		t.Fatalf("create: %q", resp.Error)
 	}
 	a, _ := h.mgr.Get(ctx, "g1", "restock")
@@ -175,7 +175,7 @@ func TestRun_ExecFailureRecordsFailedRun(t *testing.T) {
 
 func TestCreate_CheckUnavailableSurfacesError(t *testing.T) {
 	h := testHandler(t)
-	host := &scriptHost{checkErr: errors.New("talon-plugin not loaded")}
+	host := &scriptHost{checkErr: errors.New("tln-plugin not loaded")}
 	resp := create(t, h, host, "a", `workflow "x" {}`)
 	if resp.Error == "" || !strings.Contains(resp.Error, "validate") {
 		t.Errorf("expected a validation-unavailable error, got %q", resp.Error)

@@ -1,22 +1,22 @@
 # opentalon-agents
 
-OpenTalon plugin for **persistent, LLM-authored automations written in the [Talon](https://github.com/opentalon/talon-language) language.**
+OpenTalon plugin for **persistent, LLM-authored automations written in the [Tln](https://github.com/opentalon/tln-language) language.**
 
-A user describes a task in chat — *"monitor the stock item with barcode ABC-123; when stock drops below 10, open a refill ticket"* — the LLM authors it **as Talon source**, and this plugin stores it and runs it **deterministically and autonomously**: no model in the loop at run time.
+A user describes a task in chat — *"monitor the stock item with barcode ABC-123; when stock drops below 10, open a refill ticket"* — the LLM authors it **as Tln source**, and this plugin stores it and runs it **deterministically and autonomously**: no model in the loop at run time.
 
 > **Status.** Phase 1 (create/validate/run agents) is shipped. The autonomous watcher engine (polling + reactive evaluation) is Phase 2, in progress — see [Roadmap](#roadmap). The design below is the target; sections are marked _shipped_ / _planned_.
 
 ---
 
-## Why Talon (and not the LLM) at run time
+## Why Tln (and not the LLM) at run time
 
-The LLM is great at *authoring* an automation from a fuzzy request, but you don't want a model re-deciding what to do every 5 minutes forever. So the LLM writes the logic **once**, in Talon — a small deterministic language — and from then on the plugin executes it mechanically. Authoring is probabilistic; running is deterministic and cheap.
+The LLM is great at *authoring* an automation from a fuzzy request, but you don't want a model re-deciding what to do every 5 minutes forever. So the LLM writes the logic **once**, in Tln — a small deterministic language — and from then on the plugin executes it mechanically. Authoring is probabilistic; running is deterministic and cheap.
 
 ---
 
 ## Architecture
 
-`opentalon-agents` is an **external gRPC plugin**. It owns everything about an agent — the stored Talon source, triggers, run history, and watcher state — in its own SQLite/Postgres store. It **links no `talon-language` code at all**: it reaches the language only by calling **`talon-plugin`** actions *through the host*. And it doesn't run its own scheduler — it rides the host's.
+`opentalon-agents` is an **external gRPC plugin**. It owns everything about an agent — the stored Tln source, triggers, run history, and watcher state — in its own SQLite/Postgres store. It **links no `tln-language` code at all**: it reaches the language only by calling **`tln-plugin`** actions *through the host*. And it doesn't run its own scheduler — it rides the host's.
 
 ```mermaid
 flowchart LR
@@ -30,8 +30,8 @@ flowchart LR
   O <-->|gRPC bidi + HostCaller| A["opentalon-agents<br/>(agent logic + state)"]
   A --> DB[("SQLite / Postgres<br/>agents · runs · state")]
 
-  A -.->|"host.RunAction<br/>check / evaluate"| T["talon-plugin<br/>(generic language gateway)"]
-  T -.-> LANG[["Talon language<br/>Session · on-blocks"]]
+  A -.->|"host.RunAction<br/>check / evaluate"| T["tln-plugin<br/>(generic language gateway)"]
+  T -.-> LANG[["Tln language<br/>Session · on-blocks"]]
   A -.->|"host.RunAction<br/>poll / act"| MCP["MCP servers<br/>(inventory, tickets, …)"]
   T -.->|"MCP steps in fired workflows"| MCP
 ```
@@ -40,8 +40,8 @@ flowchart LR
 
 | Piece | Responsibility |
 |-------|----------------|
-| **opentalon-agents** | Agent lifecycle & state: store Talon source + triggers, poll, map data → facts, keep the fact snapshot, record runs. All "agent" logic lives here. |
-| **talon-plugin** | A *generic, agent-agnostic* gateway to the Talon language. Exposes `check` (validate source) and `evaluate` (reactively run source against facts). Knows nothing about agents. |
+| **opentalon-agents** | Agent lifecycle & state: store Tln source + triggers, poll, map data → facts, keep the fact snapshot, record runs. All "agent" logic lives here. |
+| **tln-plugin** | A *generic, agent-agnostic* gateway to the Tln language. Exposes `check` (validate source) and `evaluate` (reactively run source against facts). Knows nothing about agents. |
 | **opentalon host** | Loads plugins, exposes their actions to the LLM, dispatches calls (with credentials), and fires the periodic `tick` via its scheduler. |
 
 ---
@@ -60,12 +60,12 @@ plugins:
     expose_http: true                 # only if using webhook triggers
     config:
       db: { driver: sqlite, dsn: ./agents.db }
-      talon_plugin_name: talon-plugin
+      tln_plugin_name: tln-plugin
       webhook_secret: "${AGENTS_WEBHOOK_SECRET}"   # shared bearer for the webhook endpoint
       notify_plugin_name: _notify                  # host entrypoint for pushed notifications
-  talon-plugin:
+  tln-plugin:
     enabled: true
-    github: opentalon/talon-plugin
+    github: opentalon/tln-plugin
     ref: v0.2.0        # provides `check` + `evaluate`
 
 scheduler:
@@ -75,7 +75,7 @@ scheduler:
       action: agents.tick     # <capability-name>.<action>
 ```
 
-**2. LLM-initiated** _(shipped)_ — the advertised actions become tools (`agents.create`, `agents.run`, …). When the user asks for an automation, the LLM calls `agents.create`; because we declare `supports_callbacks`, the host dispatches over **ExecuteBidi**, so our handler gets a **live `HostCaller`** to reach `talon-plugin`.
+**2. LLM-initiated** _(shipped)_ — the advertised actions become tools (`agents.create`, `agents.run`, …). When the user asks for an automation, the LLM calls `agents.create`; because we declare `supports_callbacks`, the host dispatches over **ExecuteBidi**, so our handler gets a **live `HostCaller`** to reach `tln-plugin`.
 
 **3. Autonomous tick** _(engine implemented; requires the `scheduler.jobs` entry above)_ — the LLM is *not* involved. The `scheduler.jobs` entry fires `agents.tick` on a timer; the scheduler calls it through the orchestrator, again over bidi with a live `HostCaller`. The tick is **unscoped** (no user/group), so it sweeps all agents system-wide.
 
@@ -85,11 +85,11 @@ scheduler:
 
 **In chat:** *"Create an agent that watches stock item barcode ABC-123 and opens a refill ticket when it drops below 10."*
 
-The LLM calls **`agents.create`** with a name, the Talon source, and a poll trigger:
+The LLM calls **`agents.create`** with a name, the Tln source, and a poll trigger:
 
-**`talon_source`** — the logic, authored by the LLM:
+**`tln_source`** — the logic, authored by the LLM:
 
-```talon
+```tln
 # React to changes in an item's stock. Fire ONCE on the downward crossing
 # below 10 (prev >= 10 and new < 10) — not every tick while it stays low.
 on change attr "current_stock" {
@@ -128,13 +128,13 @@ workflow "Refill stock" {
 ]
 ```
 
-On `create`, the source is validated (`talon-plugin.check`) before it's stored — invalid Talon is rejected with compile diagnostics so the LLM can fix and retry.
+On `create`, the source is validated (`tln-plugin.check`) before it's stored — invalid Tln is rejected with compile diagnostics so the LLM can fix and retry.
 
 ---
 
 ## What happens on each tick — and where facts come in
 
-A **fact** is an EAV triple: *(entity, attribute, value)* — e.g. *(item ABC-123, `current_stock`, 8)*. The watcher works by turning each poll into a fact and letting Talon's `Session` react to **changes** in that fact. The **snapshot** is the set of facts the agent remembers between ticks; it's what makes the watcher *edge-triggered* (fire once on the crossing) and *restart-safe* (a value that hasn't changed since last time fires nothing).
+A **fact** is an EAV triple: *(entity, attribute, value)* — e.g. *(item ABC-123, `current_stock`, 8)*. The watcher works by turning each poll into a fact and letting Tln's `Session` react to **changes** in that fact. The **snapshot** is the set of facts the agent remembers between ticks; it's what makes the watcher *edge-triggered* (fire once on the crossing) and *restart-safe* (a value that hasn't changed since last time fires nothing).
 
 ```mermaid
 sequenceDiagram
@@ -143,7 +143,7 @@ sequenceDiagram
   participant O as orchestrator
   participant A as opentalon-agents
   participant M as inventory MCP
-  participant T as talon-plugin
+  participant T as tln-plugin
 
   S->>O: RunAction(agents.tick)
   O->>A: ExecuteBidi(tick) + live HostCaller
@@ -152,7 +152,7 @@ sequenceDiagram
   O->>M: get-item
   M-->>A: { item: { barcode: "ABC-123", current_stock: 8 } }
   Note over A: MAP — extract value_path (8),<br/>barcode → entity id 1 (registry),<br/>build Fact{1, current_stock, 8}
-  A->>O: RunAction(talon-plugin.evaluate<br/>{source, snapshot:{1:{current_stock:15}}, facts:[{1,current_stock,8}]})
+  A->>O: RunAction(tln-plugin.evaluate<br/>{source, snapshot:{1:{current_stock:15}}, facts:[{1,current_stock,8}]})
   O->>T: ExecuteBidi(evaluate) + live HostCaller
   Note over T: hydrate Session from snapshot (15),<br/>Assert(8): 15→8 crosses < 10 → on-block fires
   T->>O: RunAction(tickets.create {title, item, qty})
@@ -164,8 +164,8 @@ sequenceDiagram
 Step by step:
 
 1. **Poll** — the engine calls the item's MCP tool through the host: `inventory.get-item{barcode: ABC-123}` → `{ "item": { "current_stock": 8 } }`.
-2. **Map → fact** — it extracts the value at `value_path` (`8`), maps the external id (`ABC-123`) to a small integer via a per-agent registry, and builds a fact: `Fact{RecordID: "1", Attribute: "current_stock", Value: 8}`. *(The int mapping is required because Talon's snapshot is keyed by integer entity id.)*
-3. **Evaluate** — it calls `talon-plugin.evaluate` with the stored `source`, the prior `snapshot` (last known stock, e.g. 15), and the new `facts`. talon-plugin hydrates a `Session` from the snapshot, asserts the new fact, and the `on change` block sees `15 → 8`: the `when prev_value >= 10 and new_value < 10` guard holds, so it fires and runs `"Refill stock"` — whose `mcp "tickets" "create"` step is dispatched back through the host.
+2. **Map → fact** — it extracts the value at `value_path` (`8`), maps the external id (`ABC-123`) to a small integer via a per-agent registry, and builds a fact: `Fact{RecordID: "1", Attribute: "current_stock", Value: 8}`. *(The int mapping is required because Tln's snapshot is keyed by integer entity id.)*
+3. **Evaluate** — it calls `tln-plugin.evaluate` with the stored `source`, the prior `snapshot` (last known stock, e.g. 15), and the new `facts`. tln-plugin hydrates a `Session` from the snapshot, asserts the new fact, and the `on change` block sees `15 → 8`: the `when prev_value >= 10 and new_value < 10` guard holds, so it fires and runs `"Refill stock"` — whose `mcp "tickets" "create"` step is dispatched back through the host.
 4. **Persist** — the engine stores the returned snapshot (`current_stock: 8`), schedules the next poll, and records a run.
 
 Because it's edge-triggered: `8 → 8` (unchanged) fires nothing; `8 → 7` doesn't re-fire (it didn't cross *down through* 10 again); only a fresh `≥10 → <10` transition opens another ticket. Restart is safe too — the snapshot is reloaded from the DB, so replaying the last value fires nothing.
@@ -180,16 +180,16 @@ The stock watcher above takes a **fixed** action on fire (open a ticket) — no 
 
 The LLM authors the **same kind of watcher** — detection stays deterministic — but leaves the reaction to an escalation turn:
 
-**`talon_source`** — a coarse, deterministic trip. The `when` threshold is a literal (a watcher can't compare against another fact), so the *nuanced* per-SKU reasoning is deferred to the escalation turn:
+**`tln_source`** — a coarse, deterministic trip. The `when` threshold is a literal (a watcher can't compare against another fact), so the *nuanced* per-SKU reasoning is deferred to the escalation turn:
 
-```talon
+```tln
 on change attr "current_stock" {
   when prev_value >= 20 and new_value < 20
   workflow "Flag for review"
 }
 
 # No fixed action here — the reaction IS the escalation turn the plugin starts
-# when this block fires. Keep the workflow a light marker (some Talon builds
+# when this block fires. Keep the workflow a light marker (some Tln builds
 # want at least one step); the real work happens in the assistant turn.
 workflow "Flag for review" {
   step "note" { mcp "log" "info" { message "SKU crossed the review threshold" } }
@@ -293,7 +293,7 @@ or, with wording of your own:
 
 When a notify-enabled agent fires — or, for a `schedule` agent, after each run — the plugin **pushes a plain message** to the conversation the agent was created in. No model runs, no turn starts, nothing is billed.
 
-**The LLM never sees an address.** `create` / `update` declare `session_id`, `channel_id`, `conversation_id`, `sender_id` as `InjectContextArgs`; the host fills in whichever it can resolve, and the plugin stores them in `agent_notifications` alongside the opt-in. At fire time the engine calls the host's notify entrypoint (`_notify.send`, configurable via `notify_plugin_name`) with that stored target plus provenance (`source: agent`, `agent_id`, `trigger`). `show` reports *that* notifications are on, never *where* they go — so a chat address can't leak into a future Talon program.
+**The LLM never sees an address.** `create` / `update` declare `session_id`, `channel_id`, `conversation_id`, `sender_id` as `InjectContextArgs`; the host fills in whichever it can resolve, and the plugin stores them in `agent_notifications` alongside the opt-in. At fire time the engine calls the host's notify entrypoint (`_notify.send`, configurable via `notify_plugin_name`) with that stored target plus provenance (`source: agent`, `agent_id`, `trigger`). `show` reports *that* notifications are on, never *where* they go — so a chat address can't leak into a future Tln program.
 
 **Operator requirement:** the host's `_notify` entrypoint is opt-in and ships dark, like `_escalate`. Run the current host — `ghcr.io/opentalon/opentalon:latest`, rebuilt from `master` on every merge, which carries the entrypoint ([opentalon#322](https://github.com/opentalon/opentalon/pull/322)) — and set `orchestrator.notify.enabled: true` in the host config. Without the entrypoint the call fails and is logged; with it present but disabled, every send comes back `{delivered:false,reason:"disabled"}`. Either way the tick that produced the firing is unaffected.
 
@@ -330,24 +330,24 @@ Both are opt-in and independent; an agent may use either, both, or neither. A de
 
 | Action | Description |
 |--------|-------------|
-| `create` | Author an agent from Talon source (+ optional triggers, + optional `escalate`, + optional `notify`). Validated via `talon-plugin.check` before storing. |
-| `list` / `show` | Inspect agents (`show` returns the full Talon source, plus the escalation and notification config when enabled — never the delivery address). |
+| `create` | Author an agent from Tln source (+ optional triggers, + optional `escalate`, + optional `notify`). Validated via `tln-plugin.check` before storing. |
+| `list` / `show` | Inspect agents (`show` returns the full Tln source, plus the escalation and notification config when enabled — never the delivery address). |
 | `run` | Execute an agent's program now (inline) and return the result. _shipped_ |
-| `update` | Replace the Talon source / triggers / escalation / notification setting (re-validated). |
+| `update` | Replace the Tln source / triggers / escalation / notification setting (re-validated). |
 | `enable` / `disable` / `delete` | Lifecycle. |
 | `tick` | Hidden (`UserOnly`) — fired by the host scheduler to drive watchers (poll → map → evaluate). _implemented_ |
 
-`group_id` / `entity_id` are injected by the host per call; every operation is group-scoped. `create` / `update` additionally take the caller's delivery context (`session_id`, `channel_id`, `conversation_id`, `sender_id`) so escalations and notifications can reach the creator later. All actions run on the bidi path (a live `HostCaller` is needed to reach `talon-plugin`).
+`group_id` / `entity_id` are injected by the host per call; every operation is group-scoped. `create` / `update` additionally take the caller's delivery context (`session_id`, `channel_id`, `conversation_id`, `sender_id`) so escalations and notifications can reach the creator later. All actions run on the bidi path (a live `HostCaller` is needed to reach `tln-plugin`).
 
 ---
 
 ## Roadmap
 
 - **Phase 1 — _shipped_**: plugin scaffold, SQLite/Postgres store + migrations, agent CRUD, inline `run` (validate via `check`, execute via `execute_workflow`).
-- **Phase 2 — _in progress_**: the watcher/tick engine. Tracked in [#1](https://github.com/opentalon/opentalon-agents/issues/1): poll trigger + state ([#3](https://github.com/opentalon/opentalon-agents/issues/3), [#4](https://github.com/opentalon/opentalon-agents/issues/4)), `talonproxy.Evaluate` ([#5](https://github.com/opentalon/opentalon-agents/issues/5)), poller/mapper/engine ([#6](https://github.com/opentalon/opentalon-agents/issues/6)–[#8](https://github.com/opentalon/opentalon-agents/issues/8)), tick + scheduler wiring ([#9](https://github.com/opentalon/opentalon-agents/issues/9)), prompt + E2E ([#10](https://github.com/opentalon/opentalon-agents/issues/10), [#11](https://github.com/opentalon/opentalon-agents/issues/11)). Depends on `talon-plugin`'s `evaluate` action (**done**, `v0.2.0`).
+- **Phase 2 — _in progress_**: the watcher/tick engine. Tracked in [#1](https://github.com/opentalon/opentalon-agents/issues/1): poll trigger + state ([#3](https://github.com/opentalon/opentalon-agents/issues/3), [#4](https://github.com/opentalon/opentalon-agents/issues/4)), `tlnproxy.Evaluate` ([#5](https://github.com/opentalon/opentalon-agents/issues/5)), poller/mapper/engine ([#6](https://github.com/opentalon/opentalon-agents/issues/6)–[#8](https://github.com/opentalon/opentalon-agents/issues/8)), tick + scheduler wiring ([#9](https://github.com/opentalon/opentalon-agents/issues/9)), prompt + E2E ([#10](https://github.com/opentalon/opentalon-agents/issues/10), [#11](https://github.com/opentalon/opentalon-agents/issues/11)). Depends on `tln-plugin`'s `evaluate` action (**done**, `v0.2.0`).
 - **Phase 3 — webhook triggers _implemented_**: push data instead of polling. Declare a `webhook` trigger (mapping only), set `expose_http: true` + a `webhook_secret`, and POST to the endpoint below. The handler enqueues into `pending_events`; the next tick drains and evaluates it (the HTTP request has no `HostCaller`, so evaluation is deferred to the tick).
 - **Phase 4 — _implemented_** ([#13](https://github.com/opentalon/opentalon-agents/issues/13)): **`schedule` (cron) triggers** (one-shot `workflow` agent on a 5-field cron, tracked via `next_cron_at`, run through `execute_workflow`); **create-time trigger validation**; **multi-entity polls** — a poll trigger with `items_path` maps every element of a list to a fact (value_path/id_field per item), capped by `max_items_per_poll` (drops are logged, never silent); and a **configurable backoff cap** (`max_backoff_seconds`, default 30m).
-- **Phase 5 — escalation & sub-agent mode _implemented_** ([#30](https://github.com/opentalon/opentalon-agents/issues/30)): a **hybrid** reaction. Detection stays deterministic (the tick), but an agent can opt into `escalate` so that when its watcher fires, instead of only running a fixed Talon action, the plugin starts a full assistant **reasoning turn** in the creator's session (via the host's built-in `_escalate` entrypoint — requires `opentalon` ≥ `v0.0.22` with `orchestrator.escalation.enabled`). That turn can investigate (including fanning out sub-agent checks), decide, and **ask the user** what to do; its reply is pushed back to the user's channel tagged as agent-originated (`source: agent`, `agent_id`, `trigger`). Opt-in per agent, edge-triggered, and rate-limited (`escalation_max_per_window` / `escalation_window_seconds`, per-agent overridable).
+- **Phase 5 — escalation & sub-agent mode _implemented_** ([#30](https://github.com/opentalon/opentalon-agents/issues/30)): a **hybrid** reaction. Detection stays deterministic (the tick), but an agent can opt into `escalate` so that when its watcher fires, instead of only running a fixed Tln action, the plugin starts a full assistant **reasoning turn** in the creator's session (via the host's built-in `_escalate` entrypoint — requires `opentalon` ≥ `v0.0.22` with `orchestrator.escalation.enabled`). That turn can investigate (including fanning out sub-agent checks), decide, and **ask the user** what to do; its reply is pushed back to the user's channel tagged as agent-originated (`source: agent`, `agent_id`, `trigger`). Opt-in per agent, edge-triggered, and rate-limited (`escalation_max_per_window` / `escalation_window_seconds`, per-agent overridable).
 
 - **Phase 6 — proactive notifications _implemented_** ([#28](https://github.com/opentalon/opentalon-agents/issues/28)): an agent can opt into `notify` and **push a message to its creator** when it fires (or after each scheduled run) — model-free and free of charge, the cheap counterpart to `escalate`. The delivery target (`session_id` / `channel_id` / `conversation_id` / `sender_id`) is captured from host-injected context at create time into `agent_notifications`, so the LLM never sees or hardcodes a chat address; at fire time the engine calls the host's `_notify.send` entrypoint (`notify_plugin_name`; requires the current host image with `orchestrator.notify.enabled`) with that target plus `source: agent` / `agent_id` / `trigger`. Delivery failures are logged and dropped, never retried and never fatal to the tick.
 
@@ -378,7 +378,7 @@ Content-Type: application/json
 
 ### Query agents
 
-`GET /v1/agents` (same `Authorization: Bearer <webhook_secret>`) lists agent summaries — never the Talon source. AND-combined filters:
+`GET /v1/agents` (same `Authorization: Bearer <webhook_secret>`) lists agent summaries — never the Tln source. AND-combined filters:
 
 ```
 GET /agents/v1/agents?group_id=<g>&entity_id=<user>&name=<substr>&enabled=true
@@ -396,8 +396,8 @@ make test    # unit tests (store round-trip; action layer with a fake HostCaller
 make vet
 ```
 
-Requires `talon-plugin` (≥ `v0.2.0`, provides `check` + `evaluate`) loaded in the same host. `opentalon-agents` itself imports **no** `talon-language` — all language access is via `host.RunAction("talon-plugin", …)`.
+Requires `tln-plugin` (≥ `v0.2.0`, provides `check` + `evaluate`) loaded in the same host. `opentalon-agents` itself imports **no** `tln-language` — all language access is via `host.RunAction("tln-plugin", …)`.
 
 ### End-to-end tests
 
-A full-stack E2E (host + plugins + stub MCP) lives in `testharness/` and runs via `.github/workflows/e2e.yml`. The fast **deterministic** job runs on every PR. The **vcr-replay** job — real chat → LLM → Talon authoring, replayed from a committed cassette — is slow, so it's opt-in: add the **`e2e-vcr`** label to a PR to run it (`gh pr edit <n> --add-label e2e-vcr`). The committed cassette carries a `prompt_hash`; a cheap **cassette-check** job fails any PR where the authoring prompt changed but the cassette wasn't re-recorded. Re-recording against the real model happens on a published release (or manual dispatch), not nightly. See `testharness/README.md`.
+A full-stack E2E (host + plugins + stub MCP) lives in `testharness/` and runs via `.github/workflows/e2e.yml`. The fast **deterministic** job runs on every PR. The **vcr-replay** job — real chat → LLM → Tln authoring, replayed from a committed cassette — is slow, so it's opt-in: add the **`e2e-vcr`** label to a PR to run it (`gh pr edit <n> --add-label e2e-vcr`). The committed cassette carries a `prompt_hash`; a cheap **cassette-check** job fails any PR where the authoring prompt changed but the cassette wasn't re-recorded. Re-recording against the real model happens on a published release (or manual dispatch), not nightly. See `testharness/README.md`.

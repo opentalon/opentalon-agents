@@ -8,20 +8,20 @@ import (
 	"github.com/opentalon/opentalon/pkg/plugin"
 )
 
-// talonProxy is the plugin's ENTIRE coupling to the Talon language. It
-// reaches the language exclusively by calling talon-plugin's generic,
+// tlnProxy is the plugin's ENTIRE coupling to the Tln language. It
+// reaches the language exclusively by calling tln-plugin's generic,
 // agent-agnostic actions through the host — opentalon-agents links no
-// talon-language code of its own.
-type talonProxy struct {
-	pluginName string // talon-plugin's capability name (default "talon-plugin")
+// tln-language code of its own.
+type tlnProxy struct {
+	pluginName string // tln-plugin's capability name (default "tln-plugin")
 }
 
-// Check validates Talon source without executing it, via
-// talon-plugin.check. It returns ok=true for valid source; ok=false with
+// Check validates Tln source without executing it, via
+// tln-plugin.check. It returns ok=true for valid source; ok=false with
 // human-readable diagnostics for invalid source (a normal result, not an
 // error). A non-nil error means the check action itself failed to run
-// (e.g. talon-plugin not loaded).
-func (p talonProxy) Check(ctx context.Context, host plugin.HostCaller, src string) (ok bool, diagnostics string, err error) {
+// (e.g. tln-plugin not loaded).
+func (p tlnProxy) Check(ctx context.Context, host plugin.HostCaller, src string) (ok bool, diagnostics string, err error) {
 	res, err := host.RunAction(ctx, p.pluginName, "check", map[string]string{"workflow": src})
 	if err != nil {
 		return false, "", err
@@ -34,14 +34,14 @@ func (p talonProxy) Check(ctx context.Context, host plugin.HostCaller, src strin
 			return true, "", nil
 		}
 	}
-	// Invalid source: talon-plugin puts the diagnostics in Content.
+	// Invalid source: tln-plugin puts the diagnostics in Content.
 	return false, res.Content, nil
 }
 
-// Run executes Talon source via talon-plugin.execute_workflow. The MCP
+// Run executes Tln source via tln-plugin.execute_workflow. The MCP
 // steps inside the program flow back through the host's orchestrator on
-// talon-plugin's own callback stream.
-func (p talonProxy) Run(ctx context.Context, host plugin.HostCaller, src string) (plugin.CallResult, error) {
+// tln-plugin's own callback stream.
+func (p tlnProxy) Run(ctx context.Context, host plugin.HostCaller, src string) (plugin.CallResult, error) {
 	return host.RunAction(ctx, p.pluginName, "execute_workflow", map[string]string{"workflow": src})
 }
 
@@ -53,21 +53,21 @@ type Firing struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// EvalResult is the parsed result of talon-plugin.evaluate: which
+// EvalResult is the parsed result of tln-plugin.evaluate: which
 // on-blocks fired and the updated fact snapshot to persist.
 type EvalResult struct {
 	Firings  []Firing        `json:"firings"`
 	Snapshot json.RawMessage `json:"snapshot"`
 }
 
-// Evaluate reactively evaluates Talon source against facts via
-// talon-plugin.evaluate. talon-plugin hydrates a session from the prior
+// Evaluate reactively evaluates Tln source against facts via
+// tln-plugin.evaluate. tln-plugin hydrates a session from the prior
 // snapshot, asserts the facts (firing on-blocks, whose workflows run
 // their MCP steps back through the host), and returns which blocks fired
 // plus the new snapshot. `facts` is a JSON array of
 // {record_id,attribute,value}; `snapshot` is the prior snapshot JSON and
 // may be empty on the first evaluation.
-func (p talonProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source string, facts, snapshot json.RawMessage) (EvalResult, error) {
+func (p tlnProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source string, facts, snapshot json.RawMessage) (EvalResult, error) {
 	args := map[string]string{"source": source, "facts": "[]"}
 	if len(facts) > 0 {
 		args["facts"] = string(facts)
@@ -80,11 +80,11 @@ func (p talonProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source
 		return EvalResult{}, err
 	}
 	if res.StructuredContent == "" {
-		return EvalResult{}, fmt.Errorf("talon-plugin evaluate: empty result")
+		return EvalResult{}, fmt.Errorf("tln-plugin evaluate: empty result")
 	}
 	var out EvalResult
 	if err := json.Unmarshal([]byte(res.StructuredContent), &out); err != nil {
-		return EvalResult{}, fmt.Errorf("talon-plugin evaluate: decode result: %w", err)
+		return EvalResult{}, fmt.Errorf("tln-plugin evaluate: decode result: %w", err)
 	}
 	return out, nil
 }

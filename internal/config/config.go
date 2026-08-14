@@ -1,5 +1,5 @@
 // Package config parses the JSON blob the opentalon host delivers to the
-// plugin (via the OPENTALON_CONFIG env var / the Configure RPC).
+// plugin (via the OPENTLN_CONFIG env var / the Configure RPC).
 package config
 
 import (
@@ -12,12 +12,12 @@ import (
 type Config struct {
 	DB DBConfig `json:"db"`
 
-	// TalonPluginName is the capability name of the talon-plugin the
-	// host loads. opentalon-agents reaches the Talon language purely by
+	// TlnPluginName is the capability name of the tln-plugin the
+	// host loads. opentalon-agents reaches the Tln language purely by
 	// calling this plugin's actions (check / execute_workflow) through
-	// the host — it never links talon-language itself. Defaults to
-	// "talon-plugin".
-	TalonPluginName string `json:"talon_plugin_name"`
+	// the host — it never links tln-language itself. Defaults to
+	// "tln-plugin".
+	TlnPluginName string `json:"tln_plugin_name"`
 
 	// RunTimeoutSeconds bounds a single inline workflow run. 0 means no
 	// explicit timeout (the host's own action timeout still applies).
@@ -89,8 +89,8 @@ func Parse(jsonStr string) (*Config, error) {
 	if cfg.DB.DSN == "" && cfg.DB.Driver == "sqlite" {
 		cfg.DB.DSN = "./agents.db"
 	}
-	if cfg.TalonPluginName == "" {
-		cfg.TalonPluginName = "talon-plugin"
+	if cfg.TlnPluginName == "" {
+		cfg.TlnPluginName = "tln-plugin"
 	}
 	if cfg.PollFloorSeconds == 0 {
 		cfg.PollFloorSeconds = 15

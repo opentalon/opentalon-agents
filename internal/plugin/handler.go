@@ -1,6 +1,6 @@
 // Package plugin implements the opentalon-agents gRPC plugin: it manages
-// persistent, LLM-authored Talon agents and runs them by proxying to
-// talon-plugin through the host. It links no talon-language code.
+// persistent, LLM-authored Tln agents and runs them by proxying to
+// tln-plugin through the host. It links no tln-language code.
 package plugin
 
 import (
@@ -23,16 +23,16 @@ var promptText string
 
 // Handler implements pkg/plugin.StreamingHandler and Configurable. It
 // advertises SupportsCallbacks=true because every language operation
-// (validate, run) is a callback to talon-plugin through the host, which
+// (validate, run) is a callback to tln-plugin through the host, which
 // requires a live HostCaller — available only on the bidi path.
 // Configure can arrive concurrently with an in-flight action (nothing in the
-// host contract serializes them), and it replaces talon/engine wholesale, so
+// host contract serializes them), and it replaces tln/engine wholesale, so
 // mu guards those two fields: write in Configure, read on every use.
 type Handler struct {
 	mu     sync.RWMutex
 	cfg    *config.Config
 	mgr    *agent.Manager
-	talon  talonProxy
+	tln    tlnProxy
 	engine *Engine
 }
 
@@ -41,7 +41,7 @@ func NewHandler(cfg *config.Config, mgr *agent.Manager) *Handler {
 	return &Handler{
 		cfg:    cfg,
 		mgr:    mgr,
-		talon:  talonProxy{pluginName: cfg.TalonPluginName},
+		tln:    tlnProxy{pluginName: cfg.TlnPluginName},
 		engine: NewEngine(cfg, mgr),
 	}
 }
@@ -50,7 +50,7 @@ func NewHandler(cfg *config.Config, mgr *agent.Manager) *Handler {
 func (h *Handler) Capabilities() pkg.CapabilitiesMsg {
 	return pkg.CapabilitiesMsg{
 		Name:                 "agents",
-		Description:          "Create and manage persistent, LLM-authored automations written in the Talon language. Describe a task; author it as Talon source; the agent is stored and can be run on demand (schedules, polls, and webhooks follow in later phases).",
+		Description:          "Create and manage persistent, LLM-authored automations written in the Tln language. Describe a task; author it as Tln source; the agent is stored and can be run on demand (schedules, polls, and webhooks follow in later phases).",
 		Actions:              actions(),
 		SystemPromptAddition: promptText,
 		SupportsCallbacks:    true,
@@ -61,18 +61,18 @@ func (h *Handler) Capabilities() pkg.CapabilitiesMsg {
 func (h *Handler) Execute(req pkg.Request) pkg.Response {
 	return pkg.Response{
 		CallID: req.ID,
-		Error:  "opentalon-agents requires the host to dispatch over ExecuteBidi (needs a live HostCaller to reach talon-plugin).",
+		Error:  "opentalon-agents requires the host to dispatch over ExecuteBidi (needs a live HostCaller to reach tln-plugin).",
 	}
 }
 
 // Configure receives the host config block over the Init RPC, before any
 // Execute call. This is how the host actually delivers config — it does NOT
-// set OPENTALON_CONFIG on the subprocess — so we parse it here and apply it
+// set OPENTLN_CONFIG on the subprocess — so we parse it here and apply it
 // into the shared *cfg (the handler and engine hold the same pointer).
 //
 // The DB handle is already open (main.go opened it from the startup default),
 // so a divergent DB config delivered here cannot switch the live handle — we
-// warn rather than silently ignore. Every other field (talon_plugin_name,
+// warn rather than silently ignore. Every other field (tln_plugin_name,
 // default_group_id, timeouts, backoff, webhook_secret) takes effect now.
 func (h *Handler) Configure(configJSON string) error {
 	parsed, err := config.Parse(configJSON)
@@ -86,8 +86,8 @@ func (h *Handler) Configure(configJSON string) error {
 			"configured_driver", parsed.DB.Driver, "configured_dsn", parsed.DB.DSN)
 	}
 	*h.cfg = *parsed
-	h.talon = talonProxy{pluginName: h.cfg.TalonPluginName}
-	// The engine caches the plugin names it calls out to (talon, escalation,
+	h.tln = tlnProxy{pluginName: h.cfg.TlnPluginName}
+	// The engine caches the plugin names it calls out to (tln, escalation,
 	// notify) in its proxies, so it has to be rebuilt for a configured name to
 	// take effect. It keeps no in-memory state — everything is in the DB.
 	//
@@ -97,7 +97,7 @@ func (h *Handler) Configure(configJSON string) error {
 	engineCfg := *parsed
 	h.engine = NewEngine(&engineCfg, h.mgr)
 	h.mu.Unlock()
-	slog.Info("opentalon-agents: configured", "talon_plugin", parsed.TalonPluginName, "db_driver", parsed.DB.Driver, "default_group_id", parsed.DefaultGroupID)
+	slog.Info("opentalon-agents: configured", "tln_plugin", parsed.TlnPluginName, "db_driver", parsed.DB.Driver, "default_group_id", parsed.DefaultGroupID)
 	return nil
 }
 
@@ -109,11 +109,11 @@ func (h *Handler) currentEngine() *Engine {
 	return h.engine
 }
 
-// currentTalon returns the talon proxy to use for this call, same rationale.
-func (h *Handler) currentTalon() talonProxy {
+// currentTln returns the tln proxy to use for this call, same rationale.
+func (h *Handler) currentTln() tlnProxy {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return h.talon
+	return h.tln
 }
 
 // currentCfg returns a snapshot of the config for this call: Configure
@@ -125,7 +125,7 @@ func (h *Handler) currentCfg() config.Config {
 }
 
 // ExecuteWithCallbacks is the bidi path: it dispatches every action and
-// carries the live HostCaller used to reach talon-plugin.
+// carries the live HostCaller used to reach tln-plugin.
 func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
 	// tick is the hidden, system-wide scheduler action — unscoped (no
 	// group_id), so it's handled before the group gate below.
@@ -180,7 +180,7 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 // actionTick runs one system-wide watcher sweep. It is fired by the host
 // scheduler (a `scheduler.jobs` entry with `action: agents.tick`), not by
 // the LLM, and needs the live HostCaller to poll sources and reach
-// talon-plugin.
+// tln-plugin.
 func (h *Handler) actionTick(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
 	res, err := h.currentEngine().Tick(ctx, host)
 	if err != nil {
@@ -193,9 +193,9 @@ func (h *Handler) actionTick(ctx context.Context, req pkg.Request, host pkg.Host
 
 func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.HostCaller, rc agent.RunContext) pkg.Response {
 	name := req.Args["name"]
-	src := req.Args["talon_source"]
+	src := req.Args["tln_source"]
 	if name == "" || src == "" {
-		return errResp(req.ID, "name and talon_source are required")
+		return errResp(req.ID, "name and tln_source are required")
 	}
 	triggers, err := parseTriggers(req.Args["triggers"])
 	if err != nil {
@@ -231,7 +231,7 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 		Description: req.Args["description"],
 		GroupID:     rc.GroupID,
 		EntityID:    rc.EntityID,
-		TalonSource: src,
+		TlnSource:   src,
 		Triggers:    triggers,
 		Enabled:     true,
 	})
@@ -265,7 +265,7 @@ func (h *Handler) actionShow(ctx context.Context, req pkg.Request, rc agent.RunC
 		return errResp(req.ID, err.Error())
 	}
 	view := summarize(a)
-	view["talon_source"] = a.TalonSource
+	view["tln_source"] = a.TlnSource
 	view["triggers"] = a.Triggers
 	// Neither branch echoes where the agent reaches the user: the escalation
 	// session key already encodes channel + conversation, so echoing it hands
@@ -301,7 +301,7 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 	started := time.Now().UTC()
 	run.StartedAt = &started
 
-	result, runErr := h.currentTalon().Run(ctx, host, a.TalonSource)
+	result, runErr := h.currentTln().Run(ctx, host, a.TlnSource)
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 
@@ -324,9 +324,9 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 }
 
 func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.HostCaller, rc agent.RunContext) pkg.Response {
-	src := req.Args["talon_source"]
+	src := req.Args["tln_source"]
 	if src == "" {
-		return errResp(req.ID, "talon_source is required")
+		return errResp(req.ID, "tln_source is required")
 	}
 	triggers, err := parseTriggers(req.Args["triggers"])
 	if err != nil {
@@ -427,17 +427,17 @@ func (h *Handler) saveNotification(ctx context.Context, callID, agentID string, 
 	return pkg.Response{}, false
 }
 
-// validate runs talon-plugin.check and, on invalid source, returns a
+// validate runs tln-plugin.check and, on invalid source, returns a
 // populated error response and bad=true. On a valid source it returns
 // bad=false.
 func (h *Handler) validate(ctx context.Context, callID string, host pkg.HostCaller, src string) (pkg.Response, bool) {
-	talon := h.currentTalon()
-	ok, diagnostics, err := talon.Check(ctx, host, src)
+	tln := h.currentTln()
+	ok, diagnostics, err := tln.Check(ctx, host, src)
 	if err != nil {
-		return errResp(callID, fmt.Sprintf("could not validate Talon source (is %q loaded?): %v", talon.pluginName, err)), true
+		return errResp(callID, fmt.Sprintf("could not validate Tln source (is %q loaded?): %v", tln.pluginName, err)), true
 	}
 	if !ok {
-		return errResp(callID, "invalid Talon source; fix and retry:\n"+diagnostics), true
+		return errResp(callID, "invalid Tln source; fix and retry:\n"+diagnostics), true
 	}
 	return pkg.Response{}, false
 }
