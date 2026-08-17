@@ -40,6 +40,7 @@ const (
 	TriggerSchedule = "schedule"
 	TriggerPoll     = "poll"
 	TriggerWebhook  = "webhook"
+	TriggerEvent    = "event"
 )
 
 // PollConfig is the `config` payload of a poll trigger: which MCP tool to
@@ -121,13 +122,66 @@ func (a Agent) WebhookTrigger() (*WebhookConfig, bool) {
 	return nil, false
 }
 
+// Event decodes the trigger's Config as an EventConfig. (EventConfig is
+// defined with the event taxonomy in events.go.)
+func (t Trigger) Event() (*EventConfig, error) {
+	if t.Type != TriggerEvent {
+		return nil, fmt.Errorf("trigger is %q, not an event trigger", t.Type)
+	}
+	var c EventConfig
+	if err := json.Unmarshal(t.Config, &c); err != nil {
+		return nil, fmt.Errorf("decode event config: %w", err)
+	}
+	return &c, nil
+}
+
+// EventTriggers returns every event-trigger config on the agent. An agent may
+// subscribe to more than one named event, so unlike PollTrigger/WebhookTrigger
+// this returns all of them.
+func (a Agent) EventTriggers() []EventConfig {
+	var out []EventConfig
+	for _, t := range a.Triggers {
+		if t.Type == TriggerEvent {
+			if c, err := t.Event(); err == nil {
+				out = append(out, *c)
+			}
+		}
+	}
+	return out
+}
+
+// EventTrigger returns the agent's event-trigger config for the named event,
+// with taxonomy defaults resolved, if it subscribes to that event.
+func (a Agent) EventTrigger(name string) (EventConfig, bool) {
+	for _, c := range a.EventTriggers() {
+		if c.Event == name {
+			if r, err := c.Resolved(); err == nil {
+				return r, true
+			}
+		}
+	}
+	return EventConfig{}, false
+}
+
+// SubscribesTo reports whether the agent has an event trigger for the named
+// event.
+func (a Agent) SubscribesTo(name string) bool {
+	_, ok := a.EventTrigger(name)
+	return ok
+}
+
 // PendingEvent is a queued webhook delivery awaiting the next tick, stored
 // in the pending_events table. The HTTP handler that receives a webhook
 // has no HostCaller, so it can only enqueue; the tick drains and evaluates.
 type PendingEvent struct {
-	ID         string          `json:"id"`
-	AgentID    string          `json:"agent_id"`
-	Kind       string          `json:"kind"` // "facts"
+	ID      string `json:"id"`
+	AgentID string `json:"agent_id"`
+	Kind    string `json:"kind"` // "facts"
+	// Event is the named domain event this delivery carries (e.g.
+	// "item.status_changed"), set when it came from the /v1/events/<event>
+	// emitter endpoint. Empty for a generic /v1/hooks/<agent> webhook, whose
+	// mapping comes from the agent's webhook trigger instead.
+	Event      string          `json:"event,omitempty"`
 	Payload    json.RawMessage `json:"payload"`
 	ReceivedAt time.Time       `json:"received_at"`
 }

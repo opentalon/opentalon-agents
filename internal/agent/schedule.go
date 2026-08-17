@@ -60,6 +60,19 @@ func ValidateTriggers(triggers []Trigger) error {
 			if wc.ValuePath == "" || wc.Attribute == "" {
 				return fmt.Errorf("webhook trigger requires value_path and attribute")
 			}
+		case TriggerEvent:
+			ec, err := t.Event()
+			if err != nil {
+				return err
+			}
+			if ec.Event == "" {
+				return fmt.Errorf("event trigger requires an event name")
+			}
+			// Resolve applies taxonomy defaults and rejects an unknown event;
+			// after it, value_path/attribute are guaranteed present.
+			if _, err := ec.Resolved(); err != nil {
+				return err
+			}
 		case TriggerManual, "":
 			// nothing to validate
 		default:

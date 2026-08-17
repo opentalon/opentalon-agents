@@ -26,7 +26,7 @@ func actions() []pkg.ActionMsg {
 	}
 	triggers := pkg.ParameterMsg{
 		Name:        "triggers",
-		Description: `Optional JSON array of triggers, e.g. [{"type":"schedule","cron":"0 9 * * *"}]. Types: manual|schedule|poll|webhook. Stored now; acted on from Phase 2.`,
+		Description: `Optional JSON array of triggers, e.g. [{"type":"schedule","cron":"0 9 * * *"}]. Types: manual|schedule|poll|webhook|event. Use event to subscribe to a named domain event, e.g. [{"type":"event","config":{"event":"item.status_changed"}}].`,
 		Type:        "string",
 		Required:    false,
 	}

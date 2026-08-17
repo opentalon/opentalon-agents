@@ -168,7 +168,9 @@ func (e *Engine) drainPending(ctx context.Context, host pkg.HostCaller, now time
 	}
 }
 
-// applyEvent maps a webhook payload to a fact and evaluates the agent.
+// applyEvent maps a queued delivery (a generic webhook or a named domain event)
+// to a fact and evaluates the agent. The mapping and the recorded trigger type
+// depend on whether the delivery carries a named event.
 func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.PendingEvent, now time.Time) (int, error) {
 	a, err := e.mgr.GetByID(ctx, ev.AgentID)
 	if err != nil {
@@ -177,9 +179,9 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if !a.Enabled {
 		return 0, nil // dropped: agent disabled since the event arrived
 	}
-	wc, ok := a.WebhookTrigger()
-	if !ok {
-		return 0, fmt.Errorf("agent %s has no webhook trigger", a.ID)
+	valuePath, idField, attribute, triggerType, err := eventMapping(a, ev)
+	if err != nil {
+		return 0, err
 	}
 	var body any
 	if err := json.Unmarshal(ev.Payload, &body); err != nil {
@@ -189,7 +191,7 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if err != nil {
 		return 0, fmt.Errorf("get state: %w", err)
 	}
-	facts, registry, err := agent.MapValue(wc.ValuePath, wc.IDField, wc.Attribute, body, state.EntityMap)
+	facts, registry, err := agent.MapValue(valuePath, idField, attribute, body, state.EntityMap)
 	if err != nil {
 		return 0, err
 	}
@@ -207,13 +209,32 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 		return 0, fmt.Errorf("save state: %w", err)
 	}
 	if len(evalRes.Firings) > 0 {
-		e.recordRun(ctx, a, agent.TriggerWebhook, factsJSON, evalRes, now)
-		e.maybeEscalate(ctx, host, a, agent.TriggerWebhook, factsJSON, evalRes, now)
+		e.recordRun(ctx, a, triggerType, factsJSON, evalRes, now)
+		e.maybeEscalate(ctx, host, a, triggerType, factsJSON, evalRes, now)
 		e.maybeNotify(ctx, host, a, notifyEvent{
-			Trigger: agent.TriggerWebhook, Facts: factsJSON, Firings: evalRes.Firings,
+			Trigger: triggerType, Facts: factsJSON, Firings: evalRes.Firings,
 		}, now)
 	}
 	return len(evalRes.Firings), nil
+}
+
+// eventMapping resolves how a queued delivery turns into a fact, and the
+// trigger type it is recorded under. A named-event delivery uses the agent's
+// matching `event` trigger (taxonomy defaults filled in); a plain webhook
+// delivery uses the agent's webhook trigger.
+func eventMapping(a agent.Agent, ev agent.PendingEvent) (valuePath, idField, attribute, triggerType string, err error) {
+	if ev.Event != "" {
+		ec, ok := a.EventTrigger(ev.Event)
+		if !ok {
+			return "", "", "", "", fmt.Errorf("agent %s does not subscribe to event %q", a.ID, ev.Event)
+		}
+		return ec.ValuePath, ec.IDField, ec.Attribute, agent.TriggerEvent, nil
+	}
+	wc, ok := a.WebhookTrigger()
+	if !ok {
+		return "", "", "", "", fmt.Errorf("agent %s has no webhook trigger", a.ID)
+	}
+	return wc.ValuePath, wc.IDField, wc.Attribute, agent.TriggerWebhook, nil
 }
 
 // tickAgent polls, maps, evaluates, and persists a single agent. A poll

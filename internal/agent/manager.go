@@ -438,6 +438,36 @@ func (m *Manager) WebhookAgent(ctx context.Context, userID, idOrName string) (Ag
 	return a, nil
 }
 
+// SubscribersForEvent returns every enabled agent owned by userID that has an
+// `event` trigger for the named domain event. Unlike WebhookAgent (one agent by
+// name), a named event fans out: several of the user's agents may subscribe to
+// the same event, and each gets its own queued delivery. Scoped by owner
+// (entity_id), same as the webhook path.
+func (m *Manager) SubscribersForEvent(ctx context.Context, userID, event string) ([]Agent, error) {
+	if userID == "" || event == "" {
+		return nil, nil
+	}
+	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
+		triggers_json, enabled, created_at, updated_at FROM agents
+		WHERE enabled = 1 AND entity_id = ?`)
+	rows, err := m.db.SQL().QueryContext(ctx, q, userID)
+	if err != nil {
+		return nil, fmt.Errorf("subscribers for event: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Agent
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		if a.SubscribesTo(event) {
+			out = append(out, a)
+		}
+	}
+	return out, rows.Err()
+}
+
 // EnqueueEvent stores a pending webhook delivery for later draining.
 func (m *Manager) EnqueueEvent(ctx context.Context, ev PendingEvent) (PendingEvent, error) {
 	ev.ID = uuid.NewString()
@@ -449,9 +479,9 @@ func (m *Manager) EnqueueEvent(ctx context.Context, ev PendingEvent) (PendingEve
 	if payload == "" {
 		payload = "{}"
 	}
-	q := m.db.Dialect.Rebind(`INSERT INTO pending_events (id, agent_id, kind, payload_json, received_at)
-		VALUES (?, ?, ?, ?, ?)`)
-	if _, err := m.db.SQL().ExecContext(ctx, q, ev.ID, ev.AgentID, ev.Kind, payload, ev.ReceivedAt.Format(timeFmt)); err != nil {
+	q := m.db.Dialect.Rebind(`INSERT INTO pending_events (id, agent_id, kind, event, payload_json, received_at)
+		VALUES (?, ?, ?, ?, ?, ?)`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, ev.ID, ev.AgentID, ev.Kind, ev.Event, payload, ev.ReceivedAt.Format(timeFmt)); err != nil {
 		return PendingEvent{}, fmt.Errorf("enqueue event: %w", err)
 	}
 	return ev, nil
@@ -459,7 +489,7 @@ func (m *Manager) EnqueueEvent(ctx context.Context, ev PendingEvent) (PendingEve
 
 // ListPendingEvents returns all queued events, oldest first.
 func (m *Manager) ListPendingEvents(ctx context.Context) ([]PendingEvent, error) {
-	q := m.db.Dialect.Rebind(`SELECT id, agent_id, kind, payload_json, received_at
+	q := m.db.Dialect.Rebind(`SELECT id, agent_id, kind, event, payload_json, received_at
 		FROM pending_events ORDER BY received_at ASC`)
 	rows, err := m.db.SQL().QueryContext(ctx, q)
 	if err != nil {
@@ -473,7 +503,7 @@ func (m *Manager) ListPendingEvents(ctx context.Context) ([]PendingEvent, error)
 			payload  string
 			received string
 		)
-		if err := rows.Scan(&ev.ID, &ev.AgentID, &ev.Kind, &payload, &received); err != nil {
+		if err := rows.Scan(&ev.ID, &ev.AgentID, &ev.Kind, &ev.Event, &payload, &received); err != nil {
 			return nil, err
 		}
 		ev.Payload = json.RawMessage(payload)

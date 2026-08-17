@@ -25,6 +25,7 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	h := &server{cfg: cfg, mgr: mgr}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/hooks/{agent}", h.handleHook)
+	mux.HandleFunc("POST /v1/events/{event}", h.handleEvent)
 	mux.HandleFunc("GET /v1/agents", h.handleList)
 	return mux
 }
@@ -119,6 +120,64 @@ func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued", "agent_id": a.ID})
+}
+
+// handleEvent ingests a NAMED domain event (POST /v1/events/<event>) and fans
+// it out: it enqueues one delivery per enabled agent (owned by user_id) that
+// subscribes to that event. Unlike a webhook — addressed to a single agent by
+// name — an event is addressed to the taxonomy, and any number of the user's
+// agents may react. Unknown events are rejected so an emitter typo surfaces
+// instead of silently matching nothing.
+func (h *server) handleEvent(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+
+	event := r.PathValue("event")
+	if _, ok := agent.LookupEvent(event); !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "unknown event", "known_events": agent.KnownEvents(),
+		})
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "read body")
+		return
+	}
+	if len(body) > 0 && !json.Valid(body) {
+		writeErr(w, http.StatusBadRequest, "body must be JSON")
+		return
+	}
+
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		userID = userIDFromBody(body)
+	}
+	if userID == "" {
+		writeErr(w, http.StatusBadRequest, "user_id is required (query param or body field)")
+		return
+	}
+
+	subs, err := h.mgr.SubscribersForEvent(r.Context(), userID, event)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ids := make([]string, 0, len(subs))
+	for _, a := range subs {
+		if _, err := h.mgr.EnqueueEvent(r.Context(), agent.PendingEvent{
+			AgentID: a.ID, Kind: agent.EventKindFacts, Event: event, Payload: body,
+		}); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		ids = append(ids, a.ID)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "queued", "event": event, "matched": len(ids), "agent_ids": ids,
+	})
 }
 
 // authorized compares the bearer token to the configured secret in

@@ -351,6 +351,8 @@ Both are opt-in and independent; an agent may use either, both, or neither. A de
 
 - **Phase 6 — proactive notifications _implemented_** ([#28](https://github.com/opentalon/opentalon-agents/issues/28)): an agent can opt into `notify` and **push a message to its creator** when it fires (or after each scheduled run) — model-free and free of charge, the cheap counterpart to `escalate`. The delivery target (`session_id` / `channel_id` / `conversation_id` / `sender_id`) is captured from host-injected context at create time into `agent_notifications`, so the LLM never sees or hardcodes a chat address; at fire time the engine calls the host's `_notify.send` entrypoint (`notify_plugin_name`; requires the current host image with `orchestrator.notify.enabled`) with that target plus `source: agent` / `agent_id` / `trigger`. Delivery failures are logged and dropped, never retried and never fatal to the tick.
 
+- **Phase 7 — named domain events _implemented_** ([#48](https://github.com/opentalon/opentalon-agents/issues/48)): an agent can subscribe to a **semantic event** (`item.status_changed`, `item.stock_changed`, `checkout.created` / `checkout.returned`, `item.synced`) with an `event` trigger instead of a raw `webhook`. The emitter POSTs the named event to `/v1/events/<event>` and it **fans out** to every enabled agent of that user subscribed to it; each delivery is queued (tagged with the event) and drains on the next tick, mapped to a fact by the event's [taxonomy entry](#event-taxonomy-payload--fact) (overridable per agent). See [Named domain events](#named-domain-events).
+
 ## Durability & restart
 
 The plugin holds **no in-memory agent state** — the engine is DB-driven. Every `agents.tick` re-queries the DB for enabled, due agents (poll / schedule / queued webhooks) and processes them. So after a plugin or host restart, agents resume automatically:
@@ -375,6 +377,50 @@ Content-Type: application/json
 
 - The shared **`webhook_secret`** gates the endpoint (401 otherwise; 503 if unset). The **`user_id`** param (query or a top-level body field) scopes the lookup to that user's agent named in the path.
 - The body is mapped to a fact by the agent's `webhook` trigger config (`value_path`/`id_field`/`attribute`) and evaluated on the next tick — same reactive semantics as polling. Returns `202 {"status":"queued"}`.
+
+## Named domain events
+
+A `webhook` trigger addresses **one agent by name** and needs a mapping. When the host app already emits a **semantic** event for the watched thing, an agent instead subscribes to it by name with an `event` trigger — no URL, no mapping:
+
+```json
+[{"type":"event","config":{"event":"item.status_changed"}}]
+```
+
+The emitter POSTs the named event; it **fans out** to every enabled agent of that user subscribed to it:
+
+```
+POST /agents/v1/events/item.status_changed?user_id=<owner>
+Authorization: Bearer <webhook_secret>
+Content-Type: application/json
+
+{ "item_id": "ABC-123", "status": "defective" }
+```
+
+Returns `202 {"status":"queued","event":"…","matched":<n>,"agent_ids":[…]}`. An unknown event name is rejected `400` with the known list (so an emitter typo surfaces). Each match is queued into `pending_events` (tagged with the event name) and drains on the next tick, mapped to a fact by the event's taxonomy entry and evaluated like a poll/webhook.
+
+### Event taxonomy (payload → fact)
+
+Each event documents the payload the emitter sends and the fact attribute it maps to. The `on change attr "<attr>"` block in the agent watches that attribute. The mapping is overridable per agent (`value_path`/`id_field`/`attribute` in the trigger config), but the defaults are the contract:
+
+| event | payload | default `id_field` | default `value_path` | fact `attribute` |
+|---|---|---|---|---|
+| `item.status_changed` | `{"item_id","status"}` | `item_id` | `status` | `status` |
+| `item.stock_changed` | `{"item_id","stock"}` | `item_id` | `stock` | `current_stock` |
+| `checkout.created` | `{"item_id","checkout_id"}` | `item_id` | `checkout_id` | `active_checkout` |
+| `checkout.returned` | `{"item_id","checkout_id"}` | `item_id` | `checkout_id` | `last_return` |
+| `item.synced` | `{"item_id","synced_at"}` | `item_id` | `synced_at` | `last_synced` |
+
+Discrete events (a checkout happening) are modelled as a change of a monotonic value (the checkout id) so the same edge-triggered `on change attr` crossing machinery applies. Example — open a ticket when an item goes defective:
+
+```
+on change attr "status" {
+  when new_value == "defective"
+  workflow "Open ticket"
+}
+```
+```json
+[{"type":"event","config":{"event":"item.status_changed"}}]
+```
 
 ### Query agents
 

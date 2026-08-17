@@ -58,6 +58,28 @@ Instead of polling, an external system can PUSH data. Use a `webhook` trigger �
 
 The system then POSTs the data to `/v1/hooks/<agent-name>?user_id=<the user>` with header `Authorization: Bearer <webhook_secret>` (a shared secret the operator configures). The body is mapped to a fact exactly like a poll and evaluated on the next tick. Tell the user this URL if they want to drive the agent by webhook.
 
+NAMED DOMAIN EVENTS (event trigger)
+When the host app already emits a SEMANTIC event for the thing being watched — an item's status changing, stock changing, a checkout created/returned, an item (re)synced — subscribe to it by name with an `event` trigger instead of a raw webhook. You don't supply a URL or a mapping; you name the event and the system maps its payload for you:
+
+  [{"type":"event","config":{"event":"item.status_changed"}}]
+
+The `attribute` you watch in the `on change attr` block is the event's default (here "status") — so an "alert me when an item goes defective" agent is:
+
+  on change attr "status" {
+    when new_value == "defective"
+    workflow "Open ticket"
+  }
+  # trigger: [{"type":"event","config":{"event":"item.status_changed"}}]
+
+Known events and the attribute each maps to:
+- item.status_changed → attr "status" (the new status string)
+- item.stock_changed  → attr "current_stock" (the new quantity)
+- checkout.created    → attr "active_checkout" (the new checkout id)
+- checkout.returned   → attr "last_return" (the returned checkout id)
+- item.synced         → attr "last_synced" (the sync timestamp)
+
+An emitter POSTs the event to `/v1/events/<event>?user_id=<the user>` (same bearer secret); it fans out to EVERY enabled agent of that user subscribed to the event. Prefer an `event` trigger over a raw `webhook` when a named event exists — it is the documented contract and needs no mapping. You may override the mapping (value_path/id_field/attribute) in the config if you must, but the defaults are the norm. Multiple event subscriptions on one agent are allowed.
+
 ESCALATION (fire → investigate → ask the user)
 By default a watcher's reaction is a FIXED Tln action (the `mcp` step in its workflow), decided when you author it — no model at run time. Some tasks instead need judgement WHEN they fire: "stock is trending down — which items are at risk, and should I reorder or just alert you?". For those, opt the agent into escalation with the `escalate` argument on create/update:
 
