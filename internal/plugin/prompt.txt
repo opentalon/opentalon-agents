@@ -81,14 +81,28 @@ Most "monitor X and LET ME KNOW" requests want a plain message pushed back to th
   # or, with a custom message:
   notify: {"enabled":true,"template":"{{agent_name}}: stock crossed the line — {{facts}}"}
 
-When a notify-enabled agent fires (or, for a `schedule` agent, after each run) the system pushes the message to the conversation the agent was created in. The destination — channel, chat, session — is captured automatically from the create call and stored with the agent.
+When a notify-enabled agent fires (or, for a `schedule` agent, after each run) the system pushes the message. By default it goes to the conversation the agent was created in — captured automatically from the create call and stored with the agent.
 
-NEVER hardcode a chat/channel/user id and NEVER author an `mcp "<channel>" "send"` step to message the user: you do not know the user's address, and a baked-in one breaks the moment they use a different channel. `notify` is the only correct way for an agent to reach the user.
+NEVER hardcode a chat/channel/user id and NEVER author an `mcp "<channel>" "send"` step to message the user: you do not know the address, and a baked-in one breaks the moment they use a different channel. `notify` is the only correct way for an agent to reach anyone.
+
+WHO and HOW (recipients + channels)
+By default the notification goes to the creator, in-app. You can widen it with `recipients` and `channels` — both name audiences and delivery methods by KIND, never an address (the host resolves the address at fire time):
+
+  # tell the person responsible for whatever item tripped, plus email the procurement team
+  notify: {"enabled":true,
+           "recipients":[{"kind":"responsible"},{"kind":"role","role":"procurement"}],
+           "channels":["in_app","email"]}
+
+- recipients (default [{"kind":"creator"}]): any of
+  - {"kind":"creator"} (or "me") — the conversation the agent was created in.
+  - {"kind":"responsible"} — the person responsible for EACH fired item, resolved per item at fire time. Needs an `id_field` on the poll/webhook trigger so there is an item to resolve against (a watch with no id has nobody to attribute to).
+  - {"kind":"role","role":"<name>"} — a named role/team (e.g. "procurement"); the host resolves its members.
+- channels (default ["in_app"]): any of "in_app", "email". Each recipient is delivered over each selected channel.
+- Targeting ONLY responsible/role needs no creator conversation, so it can be authored from a non-interactive context. Targeting the creator (the default) still needs a chat to deliver to.
 
 - notify vs escalate: `notify` PUSHES a fixed message (free, deterministic, no model). `escalate` starts a real assistant TURN that investigates and can ask a question (costs tokens, rate-limited). "Tell me when stock drops" → notify. "Work out what's going on and check with me" → escalate. They are independent; an agent may use both, but don't set escalate when a plain message is what was asked for.
 - template placeholders: {{agent_name}}, {{description}}, {{firings}}, {{facts}}, {{result}} (schedule runs), {{error}} (failed runs), {{trigger}}. Leave template unset for a sensible default message.
 - A notify-only watcher still needs a valid tln_source — the `on change attr` block is what detects the crossing. Its workflow can be empty/minimal when the message IS the action.
-- Notification needs a conversation to deliver to — author it from the user's chat (enabling it from a non-interactive context with no known conversation is rejected).
 
 RULES
 - The `when` threshold must be a literal number (you can't compare against another fact). Bake the user's number in.

@@ -95,6 +95,35 @@ func MapValue(valuePath, idField, attribute string, response any, registry map[s
 	return []Fact{{RecordID: strconv.Itoa(id), Attribute: attribute, Value: val}}, registry, nil
 }
 
+// EntitiesForFacts returns the distinct EXTERNAL entity ids (e.g. barcodes /
+// item ids) behind a set of facts, by reversing the per-agent registry that
+// maps external ids to the small ints facts are keyed by. It is used at fire
+// time to resolve a notification's "responsible person" recipient against the
+// actual item(s) involved.
+//
+// The implicit "self" entity (a watch with no id_field) is skipped: there is no
+// external item to resolve a responsible person against.
+func EntitiesForFacts(facts []Fact, registry map[string]int) []string {
+	rev := make(map[string]string, len(registry))
+	for ext, id := range registry {
+		rev[strconv.Itoa(id)] = ext
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range facts {
+		ext, ok := rev[f.RecordID]
+		if !ok {
+			ext = f.RecordID // fall back to the raw id if the registry lacks it
+		}
+		if ext == "self" || ext == "" || seen[ext] {
+			continue
+		}
+		seen[ext] = true
+		out = append(out, ext)
+	}
+	return out
+}
+
 // assignEntityID returns the stable int id for an external id, assigning a
 // fresh one (max+1, starting at 1) on first sight. The registry MUST
 // persist so the same external entity keeps the same int across ticks and

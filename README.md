@@ -291,9 +291,29 @@ or, with wording of your own:
 { "enabled": true, "template": "{{agent_name}}: {{firings}}\n{{facts}}" }
 ```
 
-When a notify-enabled agent fires — or, for a `schedule` agent, after each run — the plugin **pushes a plain message** to the conversation the agent was created in. No model runs, no turn starts, nothing is billed.
+When a notify-enabled agent fires — or, for a `schedule` agent, after each run — the plugin **pushes a plain message**. By default it goes to the conversation the agent was created in. No model runs, no turn starts, nothing is billed.
 
-**The LLM never sees an address.** `create` / `update` declare `session_id`, `channel_id`, `conversation_id`, `sender_id` as `InjectContextArgs`; the host fills in whichever it can resolve, and the plugin stores them in `agent_notifications` alongside the opt-in. At fire time the engine calls the host's notify entrypoint (`_notify.send`, configurable via `notify_plugin_name`) with that stored target plus provenance (`source: agent`, `agent_id`, `trigger`). `show` reports *that* notifications are on, never *where* they go — so a chat address can't leak into a future Tln program.
+**The LLM never sees an address.** `create` / `update` declare `session_id`, `channel_id`, `conversation_id`, `sender_id` as `InjectContextArgs`; the host fills in whichever it can resolve, and the plugin stores them in `agent_notifications` alongside the opt-in. At fire time the engine calls the host's notify entrypoint (`_notify.send`, configurable via `notify_plugin_name`) with that stored target plus provenance (`source: agent`, `agent_id`, `trigger`). `show` reports *that* notifications are on and *which kinds* of audience/channel, never *where* they go — so a chat address can't leak into a future Tln program.
+
+### Recipients & channels
+
+`notify` defaults to the creator, in-app — but a firing often needs to reach **the person responsible for the item**, or **a role/team**, over **email** as well as in-app. Add `recipients` and `channels`, which name audiences and delivery methods **by kind, never by address**:
+
+```json
+{
+  "enabled": true,
+  "recipients": [{ "kind": "responsible" }, { "kind": "role", "role": "procurement" }],
+  "channels": ["in_app", "email"]
+}
+```
+
+- **`recipients`** (default `[{"kind":"creator"}]`):
+  - `creator` (alias `me`) — the stored delivery target (the conversation the agent was authored in).
+  - `responsible` — the person responsible for **each fired item**, resolved per item at fire time. The engine reverses the agent's entity registry to the fired item's external id and hands it to the host, which resolves the address; this needs an `id_field` on the trigger (a watch with no item id has nobody to attribute to, and that recipient is skipped).
+  - `role` — a named role/team; the host resolves its members. Requires `role`.
+- **`channels`** (default `["in_app"]`): any of `in_app`, `email`. Each recipient is delivered over each selected channel (so `2 recipients × 2 channels` fans out to four host sends).
+
+The boundary is unchanged: recipients are resolved **host-side at fire time** via the same `_notify.send` entrypoint (now also carrying `recipient_kind`, `role`, `item_id`, `delivery_channel`). No chat id, email, or role membership ever enters the Tln source or the LLM context. Because only a `creator` recipient needs a stored conversation, a notify that targets **only** responsible/role can be enabled from a non-interactive context; targeting the creator (the default) still requires a conversation. Each delivery is independent — one recipient failing is logged and skipped, never aborting the rest of the fan-out or the tick.
 
 **Operator requirement:** the host's `_notify` entrypoint is opt-in and ships dark, like `_escalate`. Run the current host — `ghcr.io/opentalon/opentalon:latest`, rebuilt from `master` on every merge, which carries the entrypoint ([opentalon#322](https://github.com/opentalon/opentalon/pull/322)) — and set `orchestrator.notify.enabled: true` in the host config. Without the entrypoint the call fails and is logged; with it present but disabled, every send comes back `{delivered:false,reason:"disabled"}`. Either way the tick that produced the firing is unaffected.
 
@@ -320,7 +340,9 @@ sequenceDiagram
 | Can ask a question | no | yes |
 | Bounded by | edge-triggered firing | firing **+** rate limit |
 
-Both are opt-in and independent; an agent may use either, both, or neither. A delivery failure (host without a notify entrypoint, channel gone) is **logged and dropped** — never retried, since a stale alert is worse than no alert, and never allowed to fail the tick that produced it. Enabling `notify` from a context with no resolvable conversation is rejected at create time rather than stored as an agent that can't reach anyone.
+Both are opt-in and independent; an agent may use either, both, or neither. A delivery failure (host without a notify entrypoint, channel gone) is **logged and dropped** — never retried, since a stale alert is worse than no alert, and never allowed to fail the tick that produced it. Enabling `notify` to the **creator** from a context with no resolvable conversation is rejected at create time rather than stored as an agent that can't reach anyone (a notify that targets only a role/responsible person has no such requirement).
+
+**Targeting** ([#47](https://github.com/opentalon/opentalon-agents/issues/47)): beyond the creator, a notification can fan out to the **responsible person per fired item** and to **named roles/teams**, over **in-app and/or email** — see [Recipients & channels](#recipients--channels) above. Recipients are named by kind and resolved host-side at fire time, so the address boundary holds.
 
 **Not covered:** two-way Q&A from a background agent (the agent pushes; the user replies in chat and the LLM handles it from there) and autonomous self-update — both deliberately out of scope, see [#28](https://github.com/opentalon/opentalon-agents/issues/28).
 

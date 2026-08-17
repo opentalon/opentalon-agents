@@ -216,9 +216,11 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	// committed. On create there is no stored row to fall back on, so the
 	// check saveNotification would make later is fully decidable here — and a
 	// post-Create rejection would leave a persisted agent behind a failed
-	// call (the retry then collides on the unique name).
-	if nspec != nil && nspec.Enabled && !rc.Delivery().Addressable() {
-		return errResp(req.ID, "notify.enabled needs a conversation to deliver to, but none is available here")
+	// call (the retry then collides on the unique name). Only a creator
+	// recipient needs the stored conversation; a notify that targets only a
+	// responsible person / role resolves host-side and needs no address here.
+	if nspec != nil && nspec.Enabled && nspec.NeedsCreatorTarget() && !rc.Delivery().Addressable() {
+		return errResp(req.ID, "notify to the creator needs a conversation to deliver to, but none is available here (target a role/responsible person instead, or author it from a chat)")
 	}
 	if spec != nil && spec.Enabled && rc.SessionID == "" {
 		return errResp(req.ID, "escalate.enabled needs an interactive session to address the turn to, but none is available here")
@@ -280,9 +282,15 @@ func (h *Handler) actionShow(ctx context.Context, req pkg.Request, rc agent.RunC
 		}
 	}
 	if n, found, err := h.mgr.GetNotification(ctx, a.ID); err == nil && found && n.Enabled {
+		// Recipients and channels are audience KINDS (creator / responsible /
+		// role, in_app / email) — not addresses — so they are safe to echo,
+		// unlike the delivery target which stays withheld.
+		spec := n.Spec()
 		view["notification"] = map[string]any{
-			"enabled":  n.Enabled,
-			"template": n.Template,
+			"enabled":    n.Enabled,
+			"template":   n.Template,
+			"recipients": spec.EffectiveRecipients(),
+			"channels":   spec.EffectiveChannels(),
 		}
 	}
 	return jsonResp(req.ID, fmt.Sprintf("Agent %q (id %s).", a.Name, a.ID), view)
@@ -412,13 +420,13 @@ func (h *Handler) saveNotification(ctx context.Context, callID, agentID string, 
 		return pkg.Response{}, false
 	}
 	target := rc.Delivery()
-	if spec.Enabled && !target.Addressable() {
+	if spec.Enabled && spec.NeedsCreatorTarget() && !target.Addressable() {
 		existing, found, err := h.mgr.GetNotification(ctx, agentID)
 		if err != nil {
 			return errResp(callID, err.Error()), true
 		}
 		if !found || !existing.Target.Addressable() {
-			return errResp(callID, "notify.enabled needs a conversation to deliver to, but none is available here"), true
+			return errResp(callID, "notify to the creator needs a conversation to deliver to, but none is available here (target a role/responsible person instead, or author it from a chat)"), true
 		}
 	}
 	if err := h.mgr.SaveNotification(ctx, agentID, target, *spec); err != nil {

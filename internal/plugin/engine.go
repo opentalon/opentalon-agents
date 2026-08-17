@@ -211,6 +211,7 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 		e.maybeEscalate(ctx, host, a, agent.TriggerWebhook, factsJSON, evalRes, now)
 		e.maybeNotify(ctx, host, a, notifyEvent{
 			Trigger: agent.TriggerWebhook, Facts: factsJSON, Firings: evalRes.Firings,
+			Entities: agent.EntitiesForFacts(facts, registry),
 		}, now)
 	}
 	return len(evalRes.Firings), nil
@@ -265,6 +266,7 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 		e.maybeEscalate(ctx, host, a, agent.TriggerPoll, factsJSON, evalRes, now)
 		e.maybeNotify(ctx, host, a, notifyEvent{
 			Trigger: agent.TriggerPoll, Facts: factsJSON, Firings: evalRes.Firings,
+			Entities: agent.EntitiesForFacts(facts, registry),
 		}, now)
 	}
 	return len(evalRes.Firings), nil

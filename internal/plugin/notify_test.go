@@ -163,8 +163,10 @@ func TestNotifier_EmptyReplyCountsAsDelivered(t *testing.T) {
 	// A host that accepts the send without returning a structured body did
 	// deliver; treating that as a failure would spam the log on every fire.
 	host := &notifyHost{}
-	out, err := notifier{pluginName: "_notify"}.Send(context.Background(), host,
-		agent.DeliveryTarget{SessionID: "s"}, "hi", "e", "g", "a", agent.TriggerPoll)
+	out, err := notifier{pluginName: "_notify"}.Send(context.Background(), host, sendRequest{
+		Target: agent.DeliveryTarget{SessionID: "s"}, RecipientKind: agent.RecipientCreator,
+		Text: "hi", EntityID: "e", GroupID: "g", AgentID: "a", Trigger: agent.TriggerPoll,
+	})
 	if err != nil || !out.Delivered {
 		t.Fatalf("empty reply: out=%+v err=%v", out, err)
 	}
@@ -172,8 +174,10 @@ func TestNotifier_EmptyReplyCountsAsDelivered(t *testing.T) {
 
 func TestNotifier_UndecodableReplyIsAnError(t *testing.T) {
 	host := &notifyHost{outcome: "not json"}
-	if _, err := (notifier{pluginName: "_notify"}).Send(context.Background(), host,
-		agent.DeliveryTarget{SessionID: "s"}, "hi", "e", "g", "a", agent.TriggerPoll); err == nil {
+	if _, err := (notifier{pluginName: "_notify"}).Send(context.Background(), host, sendRequest{
+		Target: agent.DeliveryTarget{SessionID: "s"}, RecipientKind: agent.RecipientCreator,
+		Text: "hi", EntityID: "e", GroupID: "g", AgentID: "a", Trigger: agent.TriggerPoll,
+	}); err == nil {
 		t.Fatal("expected a decode error")
 	}
 }
