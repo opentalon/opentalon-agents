@@ -269,6 +269,32 @@ func TestUpdateAgent_TriggersOnly(t *testing.T) {
 	}
 }
 
+func TestGetAgent_FullIncludesTln(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+
+	w := get(h, "/v1/agents/"+id+"?group_id=g1", "s3cr3t")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// The full view carries the program, unlike the list summary.
+	if src, _ := resp["tln_source"].(string); src == "" {
+		t.Errorf("expected tln_source in full agent, got %+v", resp)
+	}
+
+	if w := get(h, "/v1/agents/"+id, "s3cr3t"); w.Code != http.StatusBadRequest {
+		t.Errorf("no group_id: expected 400, got %d", w.Code)
+	}
+	if w := get(h, "/v1/agents/"+id+"?group_id=other", "s3cr3t"); w.Code != http.StatusNotFound {
+		t.Errorf("wrong group: expected 404, got %d", w.Code)
+	}
+}
+
 func TestAgentRuns_ListsHistory(t *testing.T) {
 	h, mgr := fixture(t, "s3cr3t")
 	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})
