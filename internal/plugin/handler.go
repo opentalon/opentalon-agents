@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -162,6 +163,8 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 		return h.actionList(ctx, req, rc)
 	case "show":
 		return h.actionShow(ctx, req, rc)
+	case "runs":
+		return h.actionRuns(ctx, req, rc)
 	case "run":
 		return h.actionRun(ctx, req, host, rc)
 	case "update":
@@ -189,6 +192,24 @@ func (h *Handler) actionTick(ctx context.Context, req pkg.Request, host pkg.Host
 	return jsonResp(req.ID,
 		fmt.Sprintf("tick: %d agent(s), %d firing(s), %d error(s)", res.Agents, res.Firings, res.Errors),
 		res)
+}
+
+// actionRuns returns an agent's run history (newest first), so the assistant
+// can answer "what did it do?" when a chat is scoped to this agent. Read-only.
+func (h *Handler) actionRuns(ctx context.Context, req pkg.Request, rc agent.RunContext) pkg.Response {
+	a, err := h.get(ctx, req, rc)
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
+	limit := 20
+	if n, convErr := strconv.Atoi(req.Args["limit"]); convErr == nil && n > 0 {
+		limit = n
+	}
+	runs, err := h.mgr.ListRuns(ctx, a.ID, limit)
+	if err != nil {
+		return errResp(req.ID, err.Error())
+	}
+	return jsonResp(req.ID, fmt.Sprintf("%d run(s) for %q.", len(runs), a.Name), map[string]any{"runs": runs})
 }
 
 func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.HostCaller, rc agent.RunContext) pkg.Response {

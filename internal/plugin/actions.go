@@ -70,6 +70,16 @@ func actions() []pkg.ActionMsg {
 			Parameters:        []pkg.ParameterMsg{idParam},
 		},
 		{
+			Name:              "runs",
+			Description:       "List an agent's run history (newest first): trigger, status, event, result, error, timestamps.",
+			InjectContextArgs: injected,
+			ReadOnly:          true,
+			Parameters: []pkg.ParameterMsg{
+				idParam,
+				{Name: "limit", Description: "Max runs to return (default 20).", Type: "string", Required: false},
+			},
+		},
+		{
 			Name:              "run",
 			Description:       "Run an agent's program now (inline), returning the result. Records a run.",
 			InjectContextArgs: injected,
