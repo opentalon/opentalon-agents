@@ -32,6 +32,7 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux.HandleFunc("DELETE /v1/agents/{id}", h.handleDelete)
 	mux.HandleFunc("GET /v1/agents/runs", h.handleLatestRuns)
 	mux.HandleFunc("GET /v1/agents/{id}/runs", h.handleRuns)
+	mux.HandleFunc("GET /v1/agents/{id}", h.handleGet)
 	return mux
 }
 
@@ -269,6 +270,36 @@ func (h *server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		runs = []agent.Run{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// handleGet serves GET /v1/agents/{id}?group_id=X — one agent in FULL (unlike
+// the list, which omits the program): includes tln_source + triggers so the
+// Timly wizard can prefill the editor with the real definition. group_id scopes
+// the lookup.
+func (h *server) handleGet(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	a, err := h.mgr.Get(r.Context(), groupID, id)
+	if err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": a.ID, "name": a.Name, "description": a.Description,
+		"group_id": a.GroupID, "entity_id": a.EntityID, "enabled": a.Enabled,
+		"tln_source": a.TlnSource, "triggers": a.Triggers,
+	})
 }
 
 // handleLatestRuns serves GET /v1/agents/runs?group_id=X — the latest run per
