@@ -76,7 +76,7 @@ plugins:
   tln-plugin:
     enabled: true
     github: opentalon/tln-plugin
-    ref: v0.3.1
+    ref: v0.4.0
     config:
       datalevin_url: "http://localhost:8898"
 
