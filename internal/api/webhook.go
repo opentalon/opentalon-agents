@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/opentalon/opentalon-agents/internal/agent"
@@ -28,6 +29,9 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux.HandleFunc("GET /v1/agents", h.handleList)
 	mux.HandleFunc("POST /v1/agents", h.handleCreate)
 	mux.HandleFunc("PUT /v1/agents/{id}", h.handleUpdate)
+	mux.HandleFunc("DELETE /v1/agents/{id}", h.handleDelete)
+	mux.HandleFunc("GET /v1/agents/runs", h.handleLatestRuns)
+	mux.HandleFunc("GET /v1/agents/{id}/runs", h.handleRuns)
 	return mux
 }
 
@@ -138,10 +142,12 @@ func (h *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 // send tln_source to re-save the program (e.g. after editing slots), enabled
 // to activate/pause. group_id scopes the lookup.
 type updateRequest struct {
-	GroupID   string          `json:"group_id"`
-	TlnSource *string         `json:"tln_source"`
-	Enabled   *bool           `json:"enabled"`
-	Triggers  []agent.Trigger `json:"triggers"`
+	GroupID     string          `json:"group_id"`
+	TlnSource   *string         `json:"tln_source"`
+	Enabled     *bool           `json:"enabled"`
+	Triggers    []agent.Trigger `json:"triggers"`
+	Name        *string         `json:"name"`
+	Description *string         `json:"description"`
 }
 
 // handleUpdate serves PUT /v1/agents/{id} — re-save a draft's Tln and/or flip
@@ -168,13 +174,24 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var a agent.Agent
-	if req.TlnSource != nil {
+	switch {
+	case req.TlnSource != nil:
 		a, err = h.mgr.Update(r.Context(), req.GroupID, id, *req.TlnSource, req.Triggers)
-	} else {
+	case req.Triggers != nil:
+		// Triggers-only update (e.g. the wizard's "When" step re-saving the
+		// schedule/event without touching the program): keep the stored Tln.
+		var cur agent.Agent
+		if cur, err = h.mgr.Get(r.Context(), req.GroupID, id); err == nil {
+			a, err = h.mgr.Update(r.Context(), req.GroupID, id, cur.TlnSource, req.Triggers)
+		}
+	default:
 		a, err = h.mgr.Get(r.Context(), req.GroupID, id)
 	}
 	if err == nil && req.Enabled != nil {
 		a, err = h.mgr.SetEnabled(r.Context(), req.GroupID, id, *req.Enabled)
+	}
+	if err == nil && (req.Name != nil || req.Description != nil) {
+		a, err = h.mgr.UpdateMeta(r.Context(), req.GroupID, id, req.Name, req.Description)
 	}
 	if err != nil {
 		if errors.Is(err, agent.ErrNotFound) {
@@ -185,6 +202,97 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.Summary())
+}
+
+// handleDelete serves DELETE /v1/agents/{id}?group_id=X — permanently remove a
+// workflow (and its escalation/notification side rows). group_id scopes the
+// lookup so one group can't delete another's agent.
+func (h *server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	if err := h.mgr.Delete(r.Context(), groupID, id); err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
+}
+
+// handleRuns serves GET /v1/agents/{id}/runs — the agent's action history,
+// newest first. This is what the runs table already records on every tick /
+// webhook / schedule fire (trigger, status, the event that fired it, and what
+// it did). group_id scopes the lookup so one group can't read another's runs;
+// optional limit caps the count (default 50). It backs both the roster's
+// activity view and the "chat with your workflow" grounding.
+func (h *server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	// Verify the agent exists in this group before exposing its runs.
+	a, err := h.mgr.Get(r.Context(), groupID, id)
+	if err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	limit := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, convErr := strconv.Atoi(l); convErr == nil {
+			limit = n
+		}
+	}
+	runs, err := h.mgr.ListRuns(r.Context(), a.ID, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []agent.Run{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// handleLatestRuns serves GET /v1/agents/runs?group_id=X — the latest run per
+// agent in the group, in a single query. Backs the roster activity line without
+// an N+1 (one call for the whole list). Each run carries its agent_id so the
+// caller can key them by workflow.
+func (h *server) handleLatestRuns(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	runs, err := h.mgr.LatestRunPerAgent(r.Context(), groupID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []agent.Run{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
 func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {

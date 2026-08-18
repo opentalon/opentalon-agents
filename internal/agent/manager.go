@@ -130,6 +130,29 @@ func (m *Manager) SetEnabled(ctx context.Context, groupID, idOrName string, enab
 }
 
 // Delete removes an agent by id or name within the group.
+// UpdateMeta updates an agent's human-facing name and/or description without
+// touching its program or triggers. nil fields are left unchanged. Used by the
+// "update-workflow" management surface (rename / redescribe).
+func (m *Manager) UpdateMeta(ctx context.Context, groupID, idOrName string, name, description *string) (Agent, error) {
+	a, err := m.Get(ctx, groupID, idOrName)
+	if err != nil {
+		return Agent{}, err
+	}
+	if name != nil {
+		a.Name = *name
+	}
+	if description != nil {
+		a.Description = *description
+	}
+	now := time.Now().UTC()
+	q := m.db.Dialect.Rebind(`UPDATE agents SET name = ?, description = ?, updated_at = ? WHERE id = ?`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, a.Name, a.Description, now.Format(timeFmt), a.ID); err != nil {
+		return Agent{}, fmt.Errorf("agent meta update: %w", err)
+	}
+	a.UpdatedAt = now
+	return a, nil
+}
+
 func (m *Manager) Delete(ctx context.Context, groupID, idOrName string) error {
 	a, err := m.Get(ctx, groupID, idOrName)
 	if err != nil {
@@ -194,6 +217,36 @@ func (m *Manager) ListRuns(ctx context.Context, agentID string, limit int) ([]Ru
 	rows, err := m.db.SQL().QueryContext(ctx, q, agentID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("run list: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// LatestRunPerAgent returns the most recent run for each agent in a group, in
+// one query — the roster's activity line without an N+1. Agents that have never
+// run are simply absent from the result. queued_at is second-precision
+// (RFC3339), so id is a deterministic tiebreak that guarantees exactly one row
+// per agent even when two runs land in the same second.
+func (m *Manager) LatestRunPerAgent(ctx context.Context, groupID string) ([]Run, error) {
+	q := m.db.Dialect.Rebind(`SELECT id, agent_id, trigger_type, status, event_json,
+		result_json, error, queued_at, started_at, finished_at FROM (
+			SELECT r.id, r.agent_id, r.trigger_type, r.status, r.event_json, r.result_json,
+				r.error, r.queued_at, r.started_at, r.finished_at,
+				ROW_NUMBER() OVER (PARTITION BY r.agent_id ORDER BY r.queued_at DESC, r.id DESC) AS rn
+			FROM runs r JOIN agents a ON a.id = r.agent_id
+			WHERE a.group_id = ?
+		) t WHERE rn = 1`)
+	rows, err := m.db.SQL().QueryContext(ctx, q, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("latest runs: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []Run

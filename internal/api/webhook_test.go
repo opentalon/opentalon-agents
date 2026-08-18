@@ -201,3 +201,156 @@ func TestUpdateAgent_NotFound(t *testing.T) {
 		t.Errorf("expected 404, got %d", w.Code)
 	}
 }
+
+func del(h http.Handler, path, bearer string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodDelete, path, nil)
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestUpdateAgent_Meta(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+	before, _ := mgr.Get(context.Background(), "g1", id)
+
+	body := `{"group_id":"g1","name":"Renamed","description":"new desc"}`
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", body); w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.Get(context.Background(), "g1", id)
+	if got.Name != "Renamed" || got.Description != "new desc" {
+		t.Errorf("meta not applied: name=%q desc=%q", got.Name, got.Description)
+	}
+	if got.TlnSource != before.TlnSource {
+		t.Errorf("tln should be unchanged: before=%q after=%q", before.TlnSource, got.TlnSource)
+	}
+}
+
+func TestDeleteAgent(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+
+	if w := del(h, "/v1/agents/"+id, "s3cr3t"); w.Code != http.StatusBadRequest {
+		t.Errorf("no group_id: expected 400, got %d", w.Code)
+	}
+	if w := del(h, "/v1/agents/"+id+"?group_id=other", "s3cr3t"); w.Code != http.StatusNotFound {
+		t.Errorf("wrong group: expected 404, got %d", w.Code)
+	}
+	if w := del(h, "/v1/agents/"+id+"?group_id=g1", "s3cr3t"); w.Code != http.StatusOK {
+		t.Fatalf("delete: expected 200, got %d body %s", w.Code, w.Body.String())
+	}
+	if _, err := mgr.Get(context.Background(), "g1", id); err == nil {
+		t.Error("agent should be gone after delete")
+	}
+}
+
+func TestUpdateAgent_TriggersOnly(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})
+	id := agents[0].ID
+	before, _ := mgr.Get(context.Background(), "g1", id)
+
+	body := `{"group_id":"g1","triggers":[{"type":"schedule","cron":"* * * * *"}]}`
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", body); w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.Get(context.Background(), "g1", id)
+	if got.TlnSource != before.TlnSource {
+		t.Errorf("tln should be unchanged: before=%q after=%q", before.TlnSource, got.TlnSource)
+	}
+	if len(got.Triggers) != 1 || got.Triggers[0].Type != agent.TriggerSchedule || got.Triggers[0].Cron != "* * * * *" {
+		t.Errorf("trigger not applied: %+v", got.Triggers)
+	}
+}
+
+func TestAgentRuns_ListsHistory(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})
+	id := agents[0].ID
+	if _, err := mgr.CreateRun(context.Background(), agent.Run{
+		AgentID: id, TriggerType: agent.TriggerPoll, Status: agent.StatusCompleted,
+		Event:  json.RawMessage(`{"stock":2}`),
+		Result: json.RawMessage(`{"firings":["reorder"]}`),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	w := get(h, "/v1/agents/"+id+"/runs?group_id=g1", "s3cr3t")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Runs []agent.Run `json:"runs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Runs) != 1 || resp.Runs[0].Status != agent.StatusCompleted {
+		t.Errorf("unexpected runs: %+v", resp.Runs)
+	}
+}
+
+func TestLatestRunPerAgent_OnePerAgent(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+	// Two runs for the same agent — only the newest should come back.
+	for _, st := range []string{agent.StatusFailed, agent.StatusCompleted} {
+		if _, err := mgr.CreateRun(context.Background(), agent.Run{
+			AgentID: id, TriggerType: agent.TriggerSchedule, Status: st,
+		}); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+	}
+
+	w := get(h, "/v1/agents/runs?group_id=g1", "s3cr3t")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Runs []agent.Run `json:"runs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Exactly one row for the agent despite two runs (the N+1-avoiding dedup).
+	if len(resp.Runs) != 1 {
+		t.Fatalf("expected one latest run for the one agent, got %d", len(resp.Runs))
+	}
+	if resp.Runs[0].AgentID != id {
+		t.Errorf("expected run for agent %s, got %+v", id, resp.Runs[0])
+	}
+
+	if w := get(h, "/v1/agents/runs", "s3cr3t"); w.Code != http.StatusBadRequest {
+		t.Errorf("no group_id: expected 400, got %d", w.Code)
+	}
+}
+
+func TestAgentRuns_ScopeAndValidation(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})
+	id := agents[0].ID
+
+	// Missing group_id is a bad request.
+	if w := get(h, "/v1/agents/"+id+"/runs", "s3cr3t"); w.Code != http.StatusBadRequest {
+		t.Errorf("no group_id: expected 400, got %d", w.Code)
+	}
+	// Wrong group can't read another group's agent runs.
+	if w := get(h, "/v1/agents/"+id+"/runs?group_id=other", "s3cr3t"); w.Code != http.StatusNotFound {
+		t.Errorf("wrong group: expected 404, got %d", w.Code)
+	}
+	// Unknown agent id.
+	if w := get(h, "/v1/agents/nope/runs?group_id=g1", "s3cr3t"); w.Code != http.StatusNotFound {
+		t.Errorf("unknown id: expected 404, got %d", w.Code)
+	}
+	// Unauthorized.
+	if w := get(h, "/v1/agents/"+id+"/runs?group_id=g1", "wrong"); w.Code != http.StatusUnauthorized {
+		t.Errorf("bad bearer: expected 401, got %d", w.Code)
+	}
+}
