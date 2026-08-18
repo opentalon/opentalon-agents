@@ -202,6 +202,25 @@ func TestUpdateAgent_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpdateAgent_TriggersOnly(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})
+	id := agents[0].ID
+	before, _ := mgr.Get(context.Background(), "g1", id)
+
+	body := `{"group_id":"g1","triggers":[{"type":"schedule","cron":"* * * * *"}]}`
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", body); w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.Get(context.Background(), "g1", id)
+	if got.TlnSource != before.TlnSource {
+		t.Errorf("tln should be unchanged: before=%q after=%q", before.TlnSource, got.TlnSource)
+	}
+	if len(got.Triggers) != 1 || got.Triggers[0].Type != agent.TriggerSchedule || got.Triggers[0].Cron != "* * * * *" {
+		t.Errorf("trigger not applied: %+v", got.Triggers)
+	}
+}
+
 func TestAgentRuns_ListsHistory(t *testing.T) {
 	h, mgr := fixture(t, "s3cr3t")
 	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})

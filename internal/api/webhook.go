@@ -170,9 +170,17 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var a agent.Agent
-	if req.TlnSource != nil {
+	switch {
+	case req.TlnSource != nil:
 		a, err = h.mgr.Update(r.Context(), req.GroupID, id, *req.TlnSource, req.Triggers)
-	} else {
+	case req.Triggers != nil:
+		// Triggers-only update (e.g. the wizard's "When" step re-saving the
+		// schedule/event without touching the program): keep the stored Tln.
+		var cur agent.Agent
+		if cur, err = h.mgr.Get(r.Context(), req.GroupID, id); err == nil {
+			a, err = h.mgr.Update(r.Context(), req.GroupID, id, cur.TlnSource, req.Triggers)
+		}
+	default:
 		a, err = h.mgr.Get(r.Context(), req.GroupID, id)
 	}
 	if err == nil && req.Enabled != nil {
