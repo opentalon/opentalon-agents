@@ -202,6 +202,54 @@ func TestUpdateAgent_NotFound(t *testing.T) {
 	}
 }
 
+func del(h http.Handler, path, bearer string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodDelete, path, nil)
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestUpdateAgent_Meta(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+	before, _ := mgr.Get(context.Background(), "g1", id)
+
+	body := `{"group_id":"g1","name":"Renamed","description":"new desc"}`
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", body); w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.Get(context.Background(), "g1", id)
+	if got.Name != "Renamed" || got.Description != "new desc" {
+		t.Errorf("meta not applied: name=%q desc=%q", got.Name, got.Description)
+	}
+	if got.TlnSource != before.TlnSource {
+		t.Errorf("tln should be unchanged: before=%q after=%q", before.TlnSource, got.TlnSource)
+	}
+}
+
+func TestDeleteAgent(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+
+	if w := del(h, "/v1/agents/"+id, "s3cr3t"); w.Code != http.StatusBadRequest {
+		t.Errorf("no group_id: expected 400, got %d", w.Code)
+	}
+	if w := del(h, "/v1/agents/"+id+"?group_id=other", "s3cr3t"); w.Code != http.StatusNotFound {
+		t.Errorf("wrong group: expected 404, got %d", w.Code)
+	}
+	if w := del(h, "/v1/agents/"+id+"?group_id=g1", "s3cr3t"); w.Code != http.StatusOK {
+		t.Fatalf("delete: expected 200, got %d body %s", w.Code, w.Body.String())
+	}
+	if _, err := mgr.Get(context.Background(), "g1", id); err == nil {
+		t.Error("agent should be gone after delete")
+	}
+}
+
 func TestUpdateAgent_TriggersOnly(t *testing.T) {
 	h, mgr := fixture(t, "s3cr3t")
 	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})

@@ -130,6 +130,29 @@ func (m *Manager) SetEnabled(ctx context.Context, groupID, idOrName string, enab
 }
 
 // Delete removes an agent by id or name within the group.
+// UpdateMeta updates an agent's human-facing name and/or description without
+// touching its program or triggers. nil fields are left unchanged. Used by the
+// "update-workflow" management surface (rename / redescribe).
+func (m *Manager) UpdateMeta(ctx context.Context, groupID, idOrName string, name, description *string) (Agent, error) {
+	a, err := m.Get(ctx, groupID, idOrName)
+	if err != nil {
+		return Agent{}, err
+	}
+	if name != nil {
+		a.Name = *name
+	}
+	if description != nil {
+		a.Description = *description
+	}
+	now := time.Now().UTC()
+	q := m.db.Dialect.Rebind(`UPDATE agents SET name = ?, description = ?, updated_at = ? WHERE id = ?`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, a.Name, a.Description, now.Format(timeFmt), a.ID); err != nil {
+		return Agent{}, fmt.Errorf("agent meta update: %w", err)
+	}
+	a.UpdatedAt = now
+	return a, nil
+}
+
 func (m *Manager) Delete(ctx context.Context, groupID, idOrName string) error {
 	a, err := m.Get(ctx, groupID, idOrName)
 	if err != nil {

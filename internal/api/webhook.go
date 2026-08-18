@@ -29,6 +29,7 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux.HandleFunc("GET /v1/agents", h.handleList)
 	mux.HandleFunc("POST /v1/agents", h.handleCreate)
 	mux.HandleFunc("PUT /v1/agents/{id}", h.handleUpdate)
+	mux.HandleFunc("DELETE /v1/agents/{id}", h.handleDelete)
 	mux.HandleFunc("GET /v1/agents/runs", h.handleLatestRuns)
 	mux.HandleFunc("GET /v1/agents/{id}/runs", h.handleRuns)
 	return mux
@@ -141,10 +142,12 @@ func (h *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 // send tln_source to re-save the program (e.g. after editing slots), enabled
 // to activate/pause. group_id scopes the lookup.
 type updateRequest struct {
-	GroupID   string          `json:"group_id"`
-	TlnSource *string         `json:"tln_source"`
-	Enabled   *bool           `json:"enabled"`
-	Triggers  []agent.Trigger `json:"triggers"`
+	GroupID     string          `json:"group_id"`
+	TlnSource   *string         `json:"tln_source"`
+	Enabled     *bool           `json:"enabled"`
+	Triggers    []agent.Trigger `json:"triggers"`
+	Name        *string         `json:"name"`
+	Description *string         `json:"description"`
 }
 
 // handleUpdate serves PUT /v1/agents/{id} — re-save a draft's Tln and/or flip
@@ -187,6 +190,9 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if err == nil && req.Enabled != nil {
 		a, err = h.mgr.SetEnabled(r.Context(), req.GroupID, id, *req.Enabled)
 	}
+	if err == nil && (req.Name != nil || req.Description != nil) {
+		a, err = h.mgr.UpdateMeta(r.Context(), req.GroupID, id, req.Name, req.Description)
+	}
 	if err != nil {
 		if errors.Is(err, agent.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "agent not found")
@@ -196,6 +202,30 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.Summary())
+}
+
+// handleDelete serves DELETE /v1/agents/{id}?group_id=X — permanently remove a
+// workflow (and its escalation/notification side rows). group_id scopes the
+// lookup so one group can't delete another's agent.
+func (h *server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	if err := h.mgr.Delete(r.Context(), groupID, id); err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": id})
 }
 
 // handleRuns serves GET /v1/agents/{id}/runs — the agent's action history,
