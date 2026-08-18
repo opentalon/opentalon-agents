@@ -122,7 +122,8 @@ func (e *Engine) scheduleAgent(ctx context.Context, host pkg.HostCaller, a agent
 	}
 
 	// Due: run the workflow, then reschedule (regardless of run outcome).
-	result, runErr := e.tln.Run(ctx, host, a.TlnSource)
+	// Carry the agent owner so the workflow's MCP steps act as that user.
+	result, runErr := e.tln.Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID})
 	next := sched.Next(now)
 	state.NextCronAt = &next
 	if err := e.mgr.SaveState(ctx, state); err != nil {
@@ -197,7 +198,8 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if err != nil {
 		return 0, err
 	}
-	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, factsJSON, state.FactsSnapshot)
+	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, factsJSON, state.FactsSnapshot,
+		Identity{EntityID: a.EntityID, GroupID: a.GroupID})
 	if err != nil {
 		return 0, err
 	}
@@ -245,7 +247,8 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
 	}
-	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, factsJSON, state.FactsSnapshot)
+	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, factsJSON, state.FactsSnapshot,
+		Identity{EntityID: a.EntityID, GroupID: a.GroupID})
 	if err != nil {
 		return 0, e.failAgent(ctx, a, state, interval, now, err)
 	}

@@ -322,7 +322,7 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 	started := time.Now().UTC()
 	run.StartedAt = &started
 
-	result, runErr := h.currentTln().Run(ctx, host, a.TlnSource)
+	result, runErr := h.currentTln().Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID})
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 

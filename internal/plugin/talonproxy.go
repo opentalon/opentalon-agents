@@ -16,6 +16,45 @@ type tlnProxy struct {
 	pluginName string // tln-plugin's capability name (default "tln-plugin")
 }
 
+// Identity is the agent-owner scope a background run acts as. A scheduled
+// / poll / event run has no profile on the wire, so the workflow's MCP
+// steps would otherwise reach Timly with no user (server_context user
+// missing → notify-user et al. fail). We carry the owner identity into the
+// tln-plugin callback as reserved args; opentalon-core's handleCallback
+// pops them off, sets the callback actor, and injects it as the
+// X-Timly-User-Id header on the leaf MCP tool call.
+type Identity struct {
+	EntityID  string // agent owner — the Timly user id (agent.EntityID)
+	GroupID   string // agent tenant — the Timly entity id (agent.GroupID)
+	SessionID string // optional originating session
+}
+
+// Reserved callback arg keys. MUST stay in lockstep with
+// pkg/plugin/contextargs.Callback* in the opentalon module; duplicated as
+// literals so opentalon-agents needs no local replace directive on the
+// core module (the values cross the wire as plain map keys).
+const (
+	cbEntityIDArg  = "__ot_cb_entity_id"
+	cbGroupIDArg   = "__ot_cb_group_id"
+	cbSessionIDArg = "__ot_cb_session_id"
+)
+
+// apply stamps the non-empty identity fields onto an args map as reserved
+// callback keys. Empty fields are omitted so an unscoped run sends nothing
+// (the host then falls closed exactly as before).
+func (id Identity) apply(args map[string]string) map[string]string {
+	if id.EntityID != "" {
+		args[cbEntityIDArg] = id.EntityID
+	}
+	if id.GroupID != "" {
+		args[cbGroupIDArg] = id.GroupID
+	}
+	if id.SessionID != "" {
+		args[cbSessionIDArg] = id.SessionID
+	}
+	return args
+}
+
 // Check validates Tln source without executing it, via
 // tln-plugin.check. It returns ok=true for valid source; ok=false with
 // human-readable diagnostics for invalid source (a normal result, not an
@@ -41,8 +80,8 @@ func (p tlnProxy) Check(ctx context.Context, host plugin.HostCaller, src string)
 // Run executes Tln source via tln-plugin.execute_workflow. The MCP
 // steps inside the program flow back through the host's orchestrator on
 // tln-plugin's own callback stream.
-func (p tlnProxy) Run(ctx context.Context, host plugin.HostCaller, src string) (plugin.CallResult, error) {
-	return host.RunAction(ctx, p.pluginName, "execute_workflow", map[string]string{"workflow": src})
+func (p tlnProxy) Run(ctx context.Context, host plugin.HostCaller, src string, id Identity) (plugin.CallResult, error) {
+	return host.RunAction(ctx, p.pluginName, "execute_workflow", id.apply(map[string]string{"workflow": src}))
 }
 
 // Firing describes one on-block that fired during an Evaluate call.
@@ -67,7 +106,7 @@ type EvalResult struct {
 // plus the new snapshot. `facts` is a JSON array of
 // {record_id,attribute,value}; `snapshot` is the prior snapshot JSON and
 // may be empty on the first evaluation.
-func (p tlnProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source string, facts, snapshot json.RawMessage) (EvalResult, error) {
+func (p tlnProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source string, facts, snapshot json.RawMessage, id Identity) (EvalResult, error) {
 	args := map[string]string{"source": source, "facts": "[]"}
 	if len(facts) > 0 {
 		args["facts"] = string(facts)
@@ -75,6 +114,7 @@ func (p tlnProxy) Evaluate(ctx context.Context, host plugin.HostCaller, source s
 	if len(snapshot) > 0 {
 		args["snapshot"] = string(snapshot)
 	}
+	id.apply(args)
 	res, err := host.RunAction(ctx, p.pluginName, "evaluate", args)
 	if err != nil {
 		return EvalResult{}, err
