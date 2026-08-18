@@ -248,6 +248,42 @@ func TestAgentRuns_ListsHistory(t *testing.T) {
 	}
 }
 
+func TestLatestRunPerAgent_OnePerAgent(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1"})
+	id := agents[0].ID
+	// Two runs for the same agent — only the newest should come back.
+	for _, st := range []string{agent.StatusFailed, agent.StatusCompleted} {
+		if _, err := mgr.CreateRun(context.Background(), agent.Run{
+			AgentID: id, TriggerType: agent.TriggerSchedule, Status: st,
+		}); err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+	}
+
+	w := get(h, "/v1/agents/runs?group_id=g1", "s3cr3t")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Runs []agent.Run `json:"runs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Exactly one row for the agent despite two runs (the N+1-avoiding dedup).
+	if len(resp.Runs) != 1 {
+		t.Fatalf("expected one latest run for the one agent, got %d", len(resp.Runs))
+	}
+	if resp.Runs[0].AgentID != id {
+		t.Errorf("expected run for agent %s, got %+v", id, resp.Runs[0])
+	}
+
+	if w := get(h, "/v1/agents/runs", "s3cr3t"); w.Code != http.StatusBadRequest {
+		t.Errorf("no group_id: expected 400, got %d", w.Code)
+	}
+}
+
 func TestAgentRuns_ScopeAndValidation(t *testing.T) {
 	h, mgr := fixture(t, "s3cr3t")
 	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})

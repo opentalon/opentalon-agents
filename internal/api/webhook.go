@@ -29,6 +29,7 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux.HandleFunc("GET /v1/agents", h.handleList)
 	mux.HandleFunc("POST /v1/agents", h.handleCreate)
 	mux.HandleFunc("PUT /v1/agents/{id}", h.handleUpdate)
+	mux.HandleFunc("GET /v1/agents/runs", h.handleLatestRuns)
 	mux.HandleFunc("GET /v1/agents/{id}/runs", h.handleRuns)
 	return mux
 }
@@ -230,6 +231,30 @@ func (h *server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	runs, err := h.mgr.ListRuns(r.Context(), a.ID, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []agent.Run{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// handleLatestRuns serves GET /v1/agents/runs?group_id=X — the latest run per
+// agent in the group, in a single query. Backs the roster activity line without
+// an N+1 (one call for the whole list). Each run carries its agent_id so the
+// caller can key them by workflow.
+func (h *server) handleLatestRuns(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	runs, err := h.mgr.LatestRunPerAgent(r.Context(), groupID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

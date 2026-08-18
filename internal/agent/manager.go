@@ -207,6 +207,36 @@ func (m *Manager) ListRuns(ctx context.Context, agentID string, limit int) ([]Ru
 	return out, rows.Err()
 }
 
+// LatestRunPerAgent returns the most recent run for each agent in a group, in
+// one query — the roster's activity line without an N+1. Agents that have never
+// run are simply absent from the result. queued_at is second-precision
+// (RFC3339), so id is a deterministic tiebreak that guarantees exactly one row
+// per agent even when two runs land in the same second.
+func (m *Manager) LatestRunPerAgent(ctx context.Context, groupID string) ([]Run, error) {
+	q := m.db.Dialect.Rebind(`SELECT id, agent_id, trigger_type, status, event_json,
+		result_json, error, queued_at, started_at, finished_at FROM (
+			SELECT r.id, r.agent_id, r.trigger_type, r.status, r.event_json, r.result_json,
+				r.error, r.queued_at, r.started_at, r.finished_at,
+				ROW_NUMBER() OVER (PARTITION BY r.agent_id ORDER BY r.queued_at DESC, r.id DESC) AS rn
+			FROM runs r JOIN agents a ON a.id = r.agent_id
+			WHERE a.group_id = ?
+		) t WHERE rn = 1`)
+	rows, err := m.db.SQL().QueryContext(ctx, q, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("latest runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetState returns the watcher state for an agent. When no row exists yet
 // (the agent has never ticked), it returns a zero state (with AgentID and
 // an empty EntityMap) and a nil error — callers treat "no state" as the
