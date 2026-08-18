@@ -26,6 +26,8 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/hooks/{agent}", h.handleHook)
 	mux.HandleFunc("GET /v1/agents", h.handleList)
+	mux.HandleFunc("POST /v1/agents", h.handleCreate)
+	mux.HandleFunc("PUT /v1/agents/{id}", h.handleUpdate)
 	return mux
 }
 
@@ -79,6 +81,110 @@ func (h *server) handleList(w http.ResponseWriter, r *http.Request) {
 		summaries = append(summaries, a.Summary())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": summaries})
+}
+
+// createRequest is the body of POST /v1/agents. It lets a host app (Timly)
+// presave a draft workflow directly into the agents store — the write
+// counterpart to handleList, gated by the same shared bearer. Drafts are
+// typically created with enabled=false and activated later.
+type createRequest struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	GroupID     string          `json:"group_id"`
+	EntityID    string          `json:"entity_id"`
+	TlnSource   string          `json:"tln_source"`
+	Enabled     bool            `json:"enabled"`
+	Triggers    []agent.Trigger `json:"triggers"`
+}
+
+// handleCreate serves POST /v1/agents — persist a (draft) agent. The Tln is
+// stored as-is (no tln-plugin.check here: the HTTP request has no HostCaller;
+// validation happens on activation).
+func (h *server) handleCreate(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "read body")
+		return
+	}
+	var req createRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "body must be JSON")
+		return
+	}
+	if req.Name == "" || req.GroupID == "" || req.TlnSource == "" {
+		writeErr(w, http.StatusBadRequest, "name, group_id and tln_source are required")
+		return
+	}
+	a, err := h.mgr.Create(r.Context(), agent.Agent{
+		Name:        req.Name,
+		Description: req.Description,
+		GroupID:     req.GroupID,
+		EntityID:    req.EntityID,
+		TlnSource:   req.TlnSource,
+		Enabled:     req.Enabled,
+		Triggers:    req.Triggers,
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, a.Summary())
+}
+
+// updateRequest is the body of PUT /v1/agents/{id}. Fields are optional:
+// send tln_source to re-save the program (e.g. after editing slots), enabled
+// to activate/pause. group_id scopes the lookup.
+type updateRequest struct {
+	GroupID   string          `json:"group_id"`
+	TlnSource *string         `json:"tln_source"`
+	Enabled   *bool           `json:"enabled"`
+	Triggers  []agent.Trigger `json:"triggers"`
+}
+
+// handleUpdate serves PUT /v1/agents/{id} — re-save a draft's Tln and/or flip
+// its enabled flag. The write counterpart used by the wizard when a draft is
+// edited or activated.
+func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "read body")
+		return
+	}
+	var req updateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "body must be JSON")
+		return
+	}
+	if req.GroupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+
+	var a agent.Agent
+	if req.TlnSource != nil {
+		a, err = h.mgr.Update(r.Context(), req.GroupID, id, *req.TlnSource, req.Triggers)
+	} else {
+		a, err = h.mgr.Get(r.Context(), req.GroupID, id)
+	}
+	if err == nil && req.Enabled != nil {
+		a, err = h.mgr.SetEnabled(r.Context(), req.GroupID, id, *req.Enabled)
+	}
+	if err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, a.Summary())
 }
 
 func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {

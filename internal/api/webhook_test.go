@@ -147,3 +147,57 @@ func TestListAgents_DisabledWithoutSecret(t *testing.T) {
 		t.Errorf("expected 503, got %d", w.Code)
 	}
 }
+
+func put(h http.Handler, path, bearer, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestCreateAgent_HappyPath(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	body := `{"name":"draft-1","group_id":"g1","entity_id":"u1","tln_source":"workflow \"x\" {}","enabled":false}`
+	if w := post(h, "/v1/agents", "s3cr3t", body); w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "draft-1"})
+	if len(agents) != 1 || agents[0].Enabled {
+		t.Errorf("expected one disabled draft, got %+v", agents)
+	}
+}
+
+func TestCreateAgent_Validation(t *testing.T) {
+	h, _ := fixture(t, "s3cr3t")
+	// Missing name and tln_source.
+	if w := post(h, "/v1/agents", "s3cr3t", `{"group_id":"g1"}`); w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	if w := post(h, "/v1/agents", "nope", `{}`); w.Code != http.StatusUnauthorized {
+		t.Errorf("wrong bearer → 401, got %d", w.Code)
+	}
+}
+
+func TestUpdateAgent_TlnAndEnabled(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	agents, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "restock"})
+	id := agents[0].ID // seeded enabled:true
+	body := `{"group_id":"g1","tln_source":"workflow \"y\" {}","enabled":false}`
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", body); w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.Get(context.Background(), "g1", id)
+	if got.TlnSource != `workflow "y" {}` || got.Enabled {
+		t.Errorf("update not applied: tln=%q enabled=%v", got.TlnSource, got.Enabled)
+	}
+}
+
+func TestUpdateAgent_NotFound(t *testing.T) {
+	h, _ := fixture(t, "s3cr3t")
+	if w := put(h, "/v1/agents/nope", "s3cr3t", `{"group_id":"g1","enabled":true}`); w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
