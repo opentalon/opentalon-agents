@@ -33,7 +33,7 @@ func TestEvaluate_ParsesFiringsAndSnapshotAndForwardsArgs(t *testing.T) {
 
 	facts := json.RawMessage(`[{"record_id":"1","attribute":"current_stock","value":8}]`)
 	snap := json.RawMessage(`{"1":{"current_stock":15}}`)
-	res, err := p.Evaluate(context.Background(), host, "SRC", facts, snap)
+	res, err := p.Evaluate(context.Background(), host, "SRC", facts, snap, Identity{})
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestEvaluate_ParsesFiringsAndSnapshotAndForwardsArgs(t *testing.T) {
 func TestEvaluate_DefaultsEmptyFacts(t *testing.T) {
 	host := &evalHost{result: `{"ok":true,"firings":[],"snapshot":{}}`}
 	p := tlnProxy{pluginName: "tln-plugin"}
-	if _, err := p.Evaluate(context.Background(), host, "SRC", nil, nil); err != nil {
+	if _, err := p.Evaluate(context.Background(), host, "SRC", nil, nil, Identity{}); err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	if host.lastArgs["facts"] != "[]" {
@@ -66,7 +66,7 @@ func TestEvaluate_DefaultsEmptyFacts(t *testing.T) {
 func TestEvaluate_HostError(t *testing.T) {
 	host := &evalHost{err: errors.New("tln-plugin not loaded")}
 	p := tlnProxy{pluginName: "tln-plugin"}
-	if _, err := p.Evaluate(context.Background(), host, "SRC", nil, nil); err == nil {
+	if _, err := p.Evaluate(context.Background(), host, "SRC", nil, nil, Identity{}); err == nil {
 		t.Error("expected error when the evaluate action fails")
 	}
 }
