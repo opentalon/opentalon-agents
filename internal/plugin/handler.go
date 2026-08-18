@@ -165,6 +165,8 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 		return h.actionShow(ctx, req, rc)
 	case "runs":
 		return h.actionRuns(ctx, req, rc)
+	case "validate":
+		return h.actionValidate(ctx, req, host)
 	case "run":
 		return h.actionRun(ctx, req, host, rc)
 	case "update":
@@ -210,6 +212,27 @@ func (h *Handler) actionRuns(ctx context.Context, req pkg.Request, rc agent.RunC
 		return errResp(req.ID, err.Error())
 	}
 	return jsonResp(req.ID, fmt.Sprintf("%d run(s) for %q.", len(runs), a.Name), map[string]any{"runs": runs})
+}
+
+// actionValidate checks a Tln program without storing or running it, returning
+// {ok, diagnostics}. This is the LLM-facing validator for machine-authored Tln:
+// it runs the tln-plugin `check` through the host (which the LLM cannot reach
+// directly), so the authoring turn can confirm a program compiles and fix any
+// diagnostics before storing.
+func (h *Handler) actionValidate(ctx context.Context, req pkg.Request, host pkg.HostCaller) pkg.Response {
+	src := req.Args["tln_source"]
+	if src == "" {
+		return errResp(req.ID, "tln_source is required")
+	}
+	ok, diagnostics, err := h.currentTln().Check(ctx, host, src)
+	if err != nil {
+		return errResp(req.ID, fmt.Sprintf("could not validate Tln source: %v", err))
+	}
+	summary := "Tln source is valid."
+	if !ok {
+		summary = "Tln source is INVALID — fix the diagnostics and retry:\n" + diagnostics
+	}
+	return jsonResp(req.ID, summary, map[string]any{"ok": ok, "diagnostics": diagnostics})
 }
 
 func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.HostCaller, rc agent.RunContext) pkg.Response {
