@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/opentalon/opentalon-agents/internal/agent"
@@ -28,6 +29,7 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux.HandleFunc("GET /v1/agents", h.handleList)
 	mux.HandleFunc("POST /v1/agents", h.handleCreate)
 	mux.HandleFunc("PUT /v1/agents/{id}", h.handleUpdate)
+	mux.HandleFunc("GET /v1/agents/{id}/runs", h.handleRuns)
 	return mux
 }
 
@@ -185,6 +187,49 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.Summary())
+}
+
+// handleRuns serves GET /v1/agents/{id}/runs — the agent's action history,
+// newest first. This is what the runs table already records on every tick /
+// webhook / schedule fire (trigger, status, the event that fired it, and what
+// it did). group_id scopes the lookup so one group can't read another's runs;
+// optional limit caps the count (default 50). It backs both the roster's
+// activity view and the "chat with your workflow" grounding.
+func (h *server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	// Verify the agent exists in this group before exposing its runs.
+	a, err := h.mgr.Get(r.Context(), groupID, id)
+	if err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	limit := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, convErr := strconv.Atoi(l); convErr == nil {
+			limit = n
+		}
+	}
+	runs, err := h.mgr.ListRuns(r.Context(), a.ID, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []agent.Run{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
 }
 
 func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {
