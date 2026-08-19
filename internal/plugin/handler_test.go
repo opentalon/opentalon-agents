@@ -94,6 +94,32 @@ func TestCreate_InvalidSourceRejectedAndNotPersisted(t *testing.T) {
 	}
 }
 
+func TestValidate_ReportsOkAndDiagnostics(t *testing.T) {
+	h := testHandler(t)
+	host := &fakeHost{}
+
+	ok := h.ExecuteWithCallbacks(context.Background(), pkg.Request{
+		ID: "v1", Action: "validate", Args: ctxArgs(map[string]string{"tln_source": `workflow "ok" {}`}),
+	}, host)
+	if ok.Error != "" || !strings.Contains(ok.StructuredContent, `"ok":true`) {
+		t.Errorf("valid source: err=%q structured=%q", ok.Error, ok.StructuredContent)
+	}
+
+	// Invalid source is a normal ok:false response (so the LLM can read + fix),
+	// NOT an error.
+	bad := h.ExecuteWithCallbacks(context.Background(), pkg.Request{
+		ID: "v2", Action: "validate", Args: ctxArgs(map[string]string{"tln_source": "INVALID {"}),
+	}, host)
+	if bad.Error != "" || !strings.Contains(bad.StructuredContent, `"ok":false`) {
+		t.Errorf("invalid source: err=%q structured=%q", bad.Error, bad.StructuredContent)
+	}
+
+	miss := h.ExecuteWithCallbacks(context.Background(), pkg.Request{ID: "v3", Action: "validate", Args: ctxArgs(nil)}, host)
+	if miss.Error == "" {
+		t.Error("missing tln_source should error")
+	}
+}
+
 func TestRun_IssuesOneExecuteWorkflowWithStoredSource(t *testing.T) {
 	h := testHandler(t)
 	host := &fakeHost{}

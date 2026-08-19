@@ -80,6 +80,15 @@ func actions() []pkg.ActionMsg {
 			},
 		},
 		{
+			Name:              "validate",
+			Description:       "Validate a Tln program without storing or running it. Returns {ok, diagnostics}. Use this to check machine-authored Tln compiles before storing.",
+			InjectContextArgs: injected,
+			ReadOnly:          true,
+			Parameters: []pkg.ParameterMsg{
+				{Name: "tln_source", Description: "The Tln program source to validate.", Type: "string", Required: true},
+			},
+		},
+		{
 			Name:              "run",
 			Description:       "Run an agent's program now (inline), returning the result. Records a run.",
 			InjectContextArgs: injected,
