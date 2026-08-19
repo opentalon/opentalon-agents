@@ -58,11 +58,46 @@ func (h *Handler) Capabilities() pkg.CapabilitiesMsg {
 	}
 }
 
-// Execute is the unary path — never used, since SupportsCallbacks=true.
+// Execute is the unary path. The read-only actions (list/show/runs) are pure
+// DB reads that need no HostCaller, so they are served here as well as on the
+// bidi path — this is how a host-side caller that doesn't open a bidi stream
+// reaches an agent's program and run history. Notably the orchestrator's
+// per-turn agent-grounding context fetch calls `show`/`runs` this way; without
+// it an agent-scoped chat has no context and asks the user "which workflow?".
+// Everything that reaches tln-plugin (create/run/update/validate/tick) still
+// requires ExecuteBidi and is refused here.
 func (h *Handler) Execute(req pkg.Request) pkg.Response {
+	switch req.Action {
+	case "list", "show", "runs":
+		groupID := req.Args["group_id"]
+		if groupID == "" {
+			cfg := h.currentCfg()
+			groupID = devFallbackGroupID(&cfg, req.Action)
+		}
+		if groupID == "" {
+			return errResp(req.ID, "missing group_id (should be injected by the host)")
+		}
+		rc := agent.RunContext{
+			GroupID:        groupID,
+			EntityID:       req.Args["entity_id"],
+			SessionID:      req.Args["session_id"],
+			ChannelID:      req.Args["channel_id"],
+			ConversationID: req.Args["conversation_id"],
+			SenderID:       req.Args["sender_id"],
+		}
+		ctx := context.Background()
+		switch req.Action {
+		case "list":
+			return h.actionList(ctx, req, rc)
+		case "show":
+			return h.actionShow(ctx, req, rc)
+		case "runs":
+			return h.actionRuns(ctx, req, rc)
+		}
+	}
 	return pkg.Response{
 		CallID: req.ID,
-		Error:  "opentalon-agents requires the host to dispatch over ExecuteBidi (needs a live HostCaller to reach tln-plugin).",
+		Error:  "opentalon-agents requires ExecuteBidi for action " + req.Action + " (needs a live HostCaller to reach tln-plugin).",
 	}
 }
 

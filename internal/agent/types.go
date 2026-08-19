@@ -40,6 +40,7 @@ const (
 	TriggerSchedule = "schedule"
 	TriggerPoll     = "poll"
 	TriggerWebhook  = "webhook"
+	TriggerEvent    = "event"
 )
 
 // PollConfig is the `config` payload of a poll trigger: which MCP tool to
@@ -121,6 +122,39 @@ func (a Agent) WebhookTrigger() (*WebhookConfig, bool) {
 	return nil, false
 }
 
+// EventConfig is the `config` payload of an event trigger. Unlike a webhook
+// trigger (which maps a POST body to a fact and evaluates detect rules), an
+// event trigger names a Timly domain event (e.g. "item_created"); when that
+// event fires, the agent's workflow is RUN with the event payload. The
+// name-to-agent match happens in the /v1/events fan-out.
+type EventConfig struct {
+	Event string `json:"event"` // domain event name, e.g. "item_created"
+}
+
+// Event decodes the trigger's Config as an EventConfig.
+func (t Trigger) Event() (*EventConfig, error) {
+	if t.Type != TriggerEvent {
+		return nil, fmt.Errorf("trigger is %q, not an event trigger", t.Type)
+	}
+	var c EventConfig
+	if err := json.Unmarshal(t.Config, &c); err != nil {
+		return nil, fmt.Errorf("decode event config: %w", err)
+	}
+	return &c, nil
+}
+
+// EventTrigger returns the agent's first event trigger config, if any.
+func (a Agent) EventTrigger() (*EventConfig, bool) {
+	for _, t := range a.Triggers {
+		if t.Type == TriggerEvent {
+			if c, err := t.Event(); err == nil {
+				return c, true
+			}
+		}
+	}
+	return nil, false
+}
+
 // PendingEvent is a queued webhook delivery awaiting the next tick, stored
 // in the pending_events table. The HTTP handler that receives a webhook
 // has no HostCaller, so it can only enqueue; the tick drains and evaluates.
@@ -133,7 +167,13 @@ type PendingEvent struct {
 }
 
 // PendingEvent kinds.
-const EventKindFacts = "facts"
+const (
+	// EventKindFacts: map the payload to a fact and evaluate detect rules
+	// (webhook/poll reactive path).
+	EventKindFacts = "facts"
+	// EventKindRun: run the agent's workflow with the payload (event triggers).
+	EventKindRun = "run"
+)
 
 // Run is one execution of an agent.
 type Run struct {

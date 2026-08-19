@@ -169,6 +169,28 @@ func (e *Engine) drainPending(ctx context.Context, host pkg.HostCaller, now time
 	}
 }
 
+// runEventWorkflow runs an event-triggered agent's workflow (imperative steps)
+// as the agent owner, records the run, and notifies. The event payload is kept
+// as the run's Event for history; passing it into the program as event.* is a
+// follow-up (tln has no context-injection option yet).
+func (e *Engine) runEventWorkflow(ctx context.Context, host pkg.HostCaller, a agent.Agent, ev agent.PendingEvent, now time.Time) (int, error) {
+	result, runErr := e.tln.Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID})
+	started := now
+	run := agent.Run{AgentID: a.ID, TriggerType: agent.TriggerEvent, Event: ev.Payload, StartedAt: &started, FinishedAt: &started}
+	if runErr != nil {
+		run.Status = agent.StatusFailed
+		run.Error = runErr.Error()
+		_, _ = e.mgr.CreateRun(ctx, run)
+		e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerEvent, Error: runErr.Error()}, now)
+		return 0, runErr
+	}
+	run.Status = agent.StatusCompleted
+	run.Result = resultJSON(result)
+	_, _ = e.mgr.CreateRun(ctx, run)
+	e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerEvent, Result: run.Result}, now)
+	return 1, nil
+}
+
 // applyEvent maps a webhook payload to a fact and evaluates the agent.
 func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.PendingEvent, now time.Time) (int, error) {
 	a, err := e.mgr.GetByID(ctx, ev.AgentID)
@@ -178,9 +200,24 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if !a.Enabled {
 		return 0, nil // dropped: agent disabled since the event arrived
 	}
+	// EventKindRun still runs the imperative workflow directly (legacy path).
+	// Domain events now arrive as EventKindFacts carrying a pre-mapped facts
+	// array, so their detect/on rules evaluate with the record bound.
+	if ev.Kind == agent.EventKindRun {
+		return e.runEventWorkflow(ctx, host, a, ev, now)
+	}
 	wc, ok := a.WebhookTrigger()
 	if !ok {
-		return 0, fmt.Errorf("agent %s has no webhook trigger", a.ID)
+		// No webhook trigger: this is a Timly domain event. Route by the shape
+		// of the agent's TLN. A reactive program (on/detect) asserts the
+		// payload's facts and evaluates, so the record binds in the rule and its
+		// notify text. A workflow-only program has no rule to fire, so it runs
+		// imperatively (the pre-reactive path). On any doubt, run.
+		reactive, rerr := e.tln.Reactive(ctx, host, a.TlnSource)
+		if rerr == nil && reactive {
+			return e.applyDomainFacts(ctx, host, a, ev, now)
+		}
+		return e.runEventWorkflow(ctx, host, a, ev, now)
 	}
 	var body any
 	if err := json.Unmarshal(ev.Payload, &body); err != nil {
@@ -213,6 +250,49 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 		e.maybeEscalate(ctx, host, a, agent.TriggerWebhook, factsJSON, evalRes, now)
 		e.maybeNotify(ctx, host, a, notifyEvent{
 			Trigger: agent.TriggerWebhook, Facts: factsJSON, Firings: evalRes.Firings,
+		}, now)
+	}
+	return len(evalRes.Firings), nil
+}
+
+// domainFactsPayload is the body Timly sends to POST /v1/events for a domain
+// event: an EAV facts array already mapped to the record's attributes, ready to
+// assert. RecordID is the Timly record id (Tln snapshots key on int ids), so no
+// per-agent registry mapping is needed.
+type domainFactsPayload struct {
+	Facts json.RawMessage `json:"facts"`
+}
+
+// applyDomainFacts asserts a Timly domain event's pre-mapped facts and
+// evaluates the agent's detect/on rules reactively, so notify text can bind the
+// record ({item.name}, {category}, {attr.*}). It advances the facts snapshot and
+// records a run / notifies only when a rule fires.
+func (e *Engine) applyDomainFacts(ctx context.Context, host pkg.HostCaller, a agent.Agent, ev agent.PendingEvent, now time.Time) (int, error) {
+	var p domainFactsPayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return 0, fmt.Errorf("decode domain event payload: %w", err)
+	}
+	if len(p.Facts) == 0 {
+		return 0, nil // nothing to assert (e.g. a record with no mappable fields)
+	}
+	state, err := e.mgr.GetState(ctx, a.ID)
+	if err != nil {
+		return 0, fmt.Errorf("get state: %w", err)
+	}
+	evalRes, err := e.tln.Evaluate(ctx, host, a.TlnSource, p.Facts, state.FactsSnapshot,
+		Identity{EntityID: a.EntityID, GroupID: a.GroupID})
+	if err != nil {
+		return 0, err
+	}
+	state.FactsSnapshot = evalRes.Snapshot
+	if err := e.mgr.SaveState(ctx, state); err != nil {
+		return 0, fmt.Errorf("save state: %w", err)
+	}
+	if len(evalRes.Firings) > 0 {
+		e.recordRun(ctx, a, agent.TriggerEvent, p.Facts, evalRes, now)
+		e.maybeEscalate(ctx, host, a, agent.TriggerEvent, p.Facts, evalRes, now)
+		e.maybeNotify(ctx, host, a, notifyEvent{
+			Trigger: agent.TriggerEvent, Facts: p.Facts, Firings: evalRes.Firings,
 		}, now)
 	}
 	return len(evalRes.Firings), nil

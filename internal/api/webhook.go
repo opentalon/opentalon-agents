@@ -26,6 +26,7 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	h := &server{cfg: cfg, mgr: mgr}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/hooks/{agent}", h.handleHook)
+	mux.HandleFunc("POST /v1/events", h.handleEvents)
 	mux.HandleFunc("GET /v1/agents", h.handleList)
 	mux.HandleFunc("POST /v1/agents", h.handleCreate)
 	mux.HandleFunc("PUT /v1/agents/{id}", h.handleUpdate)
@@ -364,6 +365,67 @@ func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued", "agent_id": a.ID})
+}
+
+// eventRequest is the body of POST /v1/events: a Timly domain event to fan out
+// to every enabled agent whose event trigger matches event_type.
+type eventRequest struct {
+	EventType string          `json:"event_type"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+}
+
+// handleEvents serves POST /v1/events?group_id=X — fan a domain event out to
+// every enabled agent whose `event` trigger matches event_type, queuing a
+// facts evaluation (EventKindFacts) for each. This is the entry point Timly
+// calls when a record is created / changes; Timly maps the record to EAV facts
+// (payload.facts) so the agent's detect/on rules evaluate with the record
+// bound. The agents run on the next tick.
+func (h *server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "read body")
+		return
+	}
+	var req eventRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "body must be JSON")
+		return
+	}
+	if req.EventType == "" {
+		writeErr(w, http.StatusBadRequest, "event_type is required")
+		return
+	}
+
+	agents, err := h.mgr.ListEnabledEventAgents(r.Context(), groupID, req.EventType)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	payload := []byte(req.Payload)
+	if len(payload) == 0 {
+		payload = []byte("{}")
+	}
+	queued := 0
+	for _, a := range agents {
+		if _, err := h.mgr.EnqueueEvent(r.Context(), agent.PendingEvent{
+			AgentID: a.ID, Kind: agent.EventKindFacts, Payload: payload,
+		}); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		queued++
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "queued", "event_type": req.EventType, "agents": queued,
+	})
 }
 
 // authorized compares the bearer token to the configured secret in
