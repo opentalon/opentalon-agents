@@ -77,6 +77,30 @@ func (p tlnProxy) Check(ctx context.Context, host plugin.HostCaller, src string)
 	return false, res.Content, nil
 }
 
+// Reactive reports whether the Tln source contains reactive rules (on/detect
+// blocks), via tln-plugin.check's structured `reactive` field. It routes a
+// domain event: reactive programs assert the payload as facts and evaluate (the
+// matched record binds in interpolation), workflow-only programs run
+// imperatively. On any error — or against a tln-plugin that predates the
+// `reactive` field — it returns false so the caller falls back to the imperative
+// run path (the pre-reactive behaviour).
+func (p tlnProxy) Reactive(ctx context.Context, host plugin.HostCaller, src string) (bool, error) {
+	res, err := host.RunAction(ctx, p.pluginName, "check", map[string]string{"workflow": src})
+	if err != nil {
+		return false, err
+	}
+	var parsed struct {
+		OK       bool `json:"ok"`
+		Reactive bool `json:"reactive"`
+	}
+	if res.StructuredContent != "" {
+		if jerr := json.Unmarshal([]byte(res.StructuredContent), &parsed); jerr == nil {
+			return parsed.OK && parsed.Reactive, nil
+		}
+	}
+	return false, nil
+}
+
 // Run executes Tln source via tln-plugin.execute_workflow. The MCP
 // steps inside the program flow back through the host's orchestrator on
 // tln-plugin's own callback stream.

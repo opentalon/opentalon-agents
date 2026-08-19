@@ -74,6 +74,27 @@ func (m *Manager) List(ctx context.Context, groupID string) ([]Agent, error) {
 	return out, rows.Err()
 }
 
+// ListEnabledEventAgents returns the enabled agents in the group whose event
+// trigger matches eventType. Filtering happens in Go (triggers live in a JSON
+// column and a group holds few agents) — the /v1/events fan-out calls this to
+// find which workflows a Timly domain event should run.
+func (m *Manager) ListEnabledEventAgents(ctx context.Context, groupID, eventType string) ([]Agent, error) {
+	all, err := m.List(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	var out []Agent
+	for _, a := range all {
+		if !a.Enabled {
+			continue
+		}
+		if c, ok := a.EventTrigger(); ok && c.Event == eventType {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // Get resolves an agent by id or name within the group.
 func (m *Manager) Get(ctx context.Context, groupID, idOrName string) (Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
