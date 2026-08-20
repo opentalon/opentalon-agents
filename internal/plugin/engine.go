@@ -121,14 +121,20 @@ func (e *Engine) scheduleAgent(ctx context.Context, host pkg.HostCaller, a agent
 		return nil // not due yet
 	}
 
-	// Due: run the workflow, then reschedule (regardless of run outcome).
+	// Due: claim this fire atomically before running, so in a cluster only one
+	// instance advances next_cron_at and runs the workflow. A loser skips.
+	next := sched.Next(now)
+	won, err := e.mgr.ClaimScheduleDue(ctx, a.ID, now, next)
+	if err != nil {
+		return fmt.Errorf("claim schedule: %w", err)
+	}
+	if !won {
+		return nil // another instance took this cron fire
+	}
+
+	// Run the workflow (next_cron_at is already advanced by the claim).
 	// Carry the agent owner so the workflow's MCP steps act as that user.
 	result, runErr := e.tln.Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID})
-	next := sched.Next(now)
-	state.NextCronAt = &next
-	if err := e.mgr.SaveState(ctx, state); err != nil {
-		return fmt.Errorf("save state: %w", err)
-	}
 
 	started := now
 	run := agent.Run{AgentID: a.ID, TriggerType: agent.TriggerSchedule, StartedAt: &started, FinishedAt: &started}
@@ -157,14 +163,23 @@ func (e *Engine) drainPending(ctx context.Context, host pkg.HostCaller, now time
 		return
 	}
 	for _, ev := range events {
+		// Cluster-safe claim: whoever deletes the row owns it. A loser skips
+		// (another instance is processing it), preventing double execution.
+		// The delete also fulfils the at-most-once contract (events were
+		// already removed regardless of outcome, to avoid poison-message loops).
+		won, err := e.mgr.ClaimEvent(ctx, ev.ID)
+		if err != nil {
+			slog.Warn("opentalon-agents: claim pending event", "event", ev.ID, "error", err)
+			continue
+		}
+		if !won {
+			continue // another instance claimed it
+		}
 		fired, err := e.applyEvent(ctx, host, ev, now)
 		res.Firings += fired
 		if err != nil {
 			res.Errors++
 			slog.Warn("opentalon-agents: pending event failed", "event", ev.ID, "agent", ev.AgentID, "error", err)
-		}
-		if derr := e.mgr.DeleteEvent(ctx, ev.ID); derr != nil {
-			slog.Warn("opentalon-agents: delete pending event", "event", ev.ID, "error", derr)
 		}
 	}
 }
@@ -311,6 +326,17 @@ func (e *Engine) tickAgent(ctx context.Context, host pkg.HostCaller, a agent.Age
 		return 0, fmt.Errorf("get state: %w", err)
 	}
 	interval := e.pollInterval(pc)
+
+	// Cluster-safe claim: advance next_poll_at up front so a second instance
+	// sweeping the same tick skips this agent. Losing the claim means another
+	// instance owns this poll — do nothing.
+	won, err := e.mgr.ClaimPollDue(ctx, a.ID, now, now.Add(interval))
+	if err != nil {
+		return 0, fmt.Errorf("claim poll: %w", err)
+	}
+	if !won {
+		return 0, nil
+	}
 
 	resp, err := agent.Poll(ctx, host, *pc)
 	if err != nil {

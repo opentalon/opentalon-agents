@@ -523,12 +523,88 @@ func (m *Manager) EnqueueEvent(ctx context.Context, ev PendingEvent) (PendingEve
 	if payload == "" {
 		payload = "{}"
 	}
-	q := m.db.Dialect.Rebind(`INSERT INTO pending_events (id, agent_id, kind, payload_json, received_at)
-		VALUES (?, ?, ?, ?, ?)`)
-	if _, err := m.db.SQL().ExecContext(ctx, q, ev.ID, ev.AgentID, ev.Kind, payload, ev.ReceivedAt.Format(timeFmt)); err != nil {
+	// NULL when unset so the unique index (NULLs distinct) never collapses
+	// keyless events; a set key dedupes repeat deliveries via ON CONFLICT.
+	var idem any
+	if ev.IdempotencyKey != "" {
+		idem = ev.IdempotencyKey
+	}
+	q := m.db.Dialect.Rebind(`INSERT INTO pending_events (id, agent_id, kind, payload_json, received_at, idempotency_key)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(idempotency_key) DO NOTHING`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, ev.ID, ev.AgentID, ev.Kind, payload, ev.ReceivedAt.Format(timeFmt), idem); err != nil {
 		return PendingEvent{}, fmt.Errorf("enqueue event: %w", err)
 	}
 	return ev, nil
+}
+
+// ClaimEvent atomically claims a queued event for processing by deleting it:
+// exactly one instance's DELETE affects a row, so only that instance runs the
+// event. Returns false when another instance already claimed (deleted) it. The
+// caller already holds the payload from ListPendingEvents, so no RETURNING is
+// needed — keeping this portable across SQLite and Postgres.
+func (m *Manager) ClaimEvent(ctx context.Context, id string) (bool, error) {
+	q := m.db.Dialect.Rebind(`DELETE FROM pending_events WHERE id = ?`)
+	res, err := m.db.SQL().ExecContext(ctx, q, id)
+	if err != nil {
+		return false, fmt.Errorf("claim event: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClaimPollDue atomically claims a due poll agent by advancing its next_poll_at
+// to next, so that in a multi-instance (cluster) deployment only one instance
+// processes a given tick. It returns true only to the caller that won the
+// claim; a loser (another instance already advanced the row, or it is no longer
+// due) gets false and must skip the agent.
+//
+// The provisional next_poll_at doubles as a lease: if the winner crashes
+// mid-poll before SaveState writes the real schedule, the agent simply becomes
+// due again after the interval.
+func (m *Manager) ClaimPollDue(ctx context.Context, agentID string, now, next time.Time) (bool, error) {
+	// Fast path: advance an existing row that is still due. RFC3339-UTC strings
+	// are fixed-width and sort lexicographically, so `<=` compares correctly.
+	upd := m.db.Dialect.Rebind(`UPDATE agent_state SET next_poll_at = ?
+		WHERE agent_id = ? AND (next_poll_at IS NULL OR next_poll_at <= ?)`)
+	res, err := m.db.SQL().ExecContext(ctx, upd,
+		next.UTC().Format(timeFmt), agentID, now.UTC().Format(timeFmt))
+	if err != nil {
+		return false, fmt.Errorf("claim poll-due: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return true, nil
+	}
+	// No row advanced: either the agent has no state row yet (first tick) or
+	// another instance already claimed it. Insert a fresh row; the primary-key
+	// conflict makes exactly one concurrent inserter win (the rest DO NOTHING).
+	ins := m.db.Dialect.Rebind(`INSERT INTO agent_state
+		(agent_id, facts_snapshot_json, entity_map_json, next_poll_at, next_cron_at, consecutive_failures)
+		VALUES (?, '{}', '{}', ?, NULL, 0)
+		ON CONFLICT(agent_id) DO NOTHING`)
+	res2, err := m.db.SQL().ExecContext(ctx, ins, agentID, next.UTC().Format(timeFmt))
+	if err != nil {
+		return false, fmt.Errorf("claim poll-due insert: %w", err)
+	}
+	n, _ := res2.RowsAffected()
+	return n > 0, nil
+}
+
+// ClaimScheduleDue atomically claims a due cron agent by advancing its
+// next_cron_at to next. Only the winning instance gets true and should run the
+// workflow; the row must already exist (first-sight initialization is a
+// separate, idempotent step in the engine). Returns false when another instance
+// already advanced it or it is no longer due.
+func (m *Manager) ClaimScheduleDue(ctx context.Context, agentID string, now, next time.Time) (bool, error) {
+	upd := m.db.Dialect.Rebind(`UPDATE agent_state SET next_cron_at = ?
+		WHERE agent_id = ? AND next_cron_at IS NOT NULL AND next_cron_at <= ?`)
+	res, err := m.db.SQL().ExecContext(ctx, upd,
+		next.UTC().Format(timeFmt), agentID, now.UTC().Format(timeFmt))
+	if err != nil {
+		return false, fmt.Errorf("claim schedule-due: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ListPendingEvents returns all queued events, oldest first.

@@ -360,7 +360,10 @@ func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if _, err := h.mgr.EnqueueEvent(r.Context(), agent.PendingEvent{AgentID: a.ID, Kind: agent.EventKindFacts, Payload: body}); err != nil {
+	if _, err := h.mgr.EnqueueEvent(r.Context(), agent.PendingEvent{
+		AgentID: a.ID, Kind: agent.EventKindFacts, Payload: body,
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+	}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -371,6 +374,7 @@ func (h *server) handleHook(w http.ResponseWriter, r *http.Request) {
 // to every enabled agent whose event trigger matches event_type.
 type eventRequest struct {
 	EventType string          `json:"event_type"`
+	EventID   string          `json:"event_id,omitempty"` // optional; dedupes redelivered domain events
 	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -413,10 +417,20 @@ func (h *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
+	// A single domain event fans out to N agents; scope the dedup key per agent
+	// so redelivery of the same event collapses per agent, not across agents.
+	eventID := r.Header.Get("Idempotency-Key")
+	if eventID == "" {
+		eventID = req.EventID
+	}
 	queued := 0
 	for _, a := range agents {
+		var idem string
+		if eventID != "" {
+			idem = eventID + ":" + a.ID
+		}
 		if _, err := h.mgr.EnqueueEvent(r.Context(), agent.PendingEvent{
-			AgentID: a.ID, Kind: agent.EventKindFacts, Payload: payload,
+			AgentID: a.ID, Kind: agent.EventKindFacts, Payload: payload, IdempotencyKey: idem,
 		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
