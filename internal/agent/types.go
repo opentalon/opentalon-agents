@@ -164,6 +164,9 @@ type PendingEvent struct {
 	Kind       string          `json:"kind"` // "facts"
 	Payload    json.RawMessage `json:"payload"`
 	ReceivedAt time.Time       `json:"received_at"`
+	// IdempotencyKey, when set, dedupes duplicate deliveries: a second enqueue
+	// with the same key is silently dropped. Empty means no dedup (stored NULL).
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // PendingEvent kinds.

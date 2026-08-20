@@ -361,6 +361,16 @@ The plugin holds **no in-memory agent state** — the engine is DB-driven. Every
 
 The only external requirement is that the host keeps firing `agents.tick` — its `scheduler.jobs` entry lives in host config (dynamic jobs persist in `dataDir/scheduler/jobs.yaml`), so it resumes on host restart too. Nothing needs to "bring agents back online."
 
+## Cluster mode (avoiding double execution)
+
+Multiple plugin instances can run against **one shared Postgres database** without double-firing agents — no leader election needed. Each due item is claimed atomically before any work happens, so exactly one instance processes it per tick:
+
+- **Poll / schedule** — before polling or running, the instance advances `next_poll_at` / `next_cron_at` with a conditional `UPDATE … WHERE next_*_at <= now` (or an `INSERT … ON CONFLICT DO NOTHING` for an agent's first tick). Only the instance whose statement affects a row proceeds; the rest skip. The advanced timestamp doubles as a lease — if the winner crashes mid-run, the agent simply becomes due again after its interval.
+- **Queued events** — drained with delete-to-claim (`DELETE … WHERE id = ?`): whoever's delete affects the row owns the event. This keeps the existing at-most-once contract (events were already removed regardless of outcome, to avoid poison-message loops) and makes it cluster-safe.
+- **Duplicate deliveries** — `pending_events.idempotency_key` (unique index, NULLs distinct) collapses redelivered events at enqueue time. Send an `Idempotency-Key` header to `/v1/hooks/*` or an `event_id` to `/v1/events`; without one, events are never deduped (backward compatible).
+
+> **SQLite caveat:** SQLite is single-writer and its file locking is unreliable across machines, so multi-instance HA requires the **Postgres** backend. A single SQLite file is fine for one instance.
+
 ## Webhooks
 
 With `expose_http: true`, the host reverse-proxies `/<config-key>/*` to the plugin's private listener. An external system pushes data with:
