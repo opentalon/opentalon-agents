@@ -380,3 +380,182 @@ func TestAgentRuns_ScopeAndValidation(t *testing.T) {
 		t.Errorf("bad bearer: expected 401, got %d", w.Code)
 	}
 }
+
+func TestAgentAutonomy_CreateDefaultAndUpdate(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+
+	// Create without autonomy → defaults to "ask", and the summary carries it.
+	body := `{"name":"auto-default","group_id":"g1","entity_id":"u1","tln_source":"workflow \"x\" {}"}`
+	w := post(h, "/v1/agents", "s3cr3t", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: got %d, body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"autonomy":"ask"`) {
+		t.Errorf("create summary should default autonomy to ask: %s", w.Body.String())
+	}
+
+	// Create WITH an explicit autonomy is stored verbatim.
+	body = `{"name":"auto-act","group_id":"g1","entity_id":"u1","tln_source":"workflow \"x\" {}","autonomy":"act"}`
+	if w := post(h, "/v1/agents", "s3cr3t", body); w.Code != http.StatusCreated {
+		t.Fatalf("create act: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "auto-act"})
+	if len(got) != 1 || got[0].Autonomy != "act" {
+		t.Fatalf("expected autonomy=act, got %+v", got)
+	}
+
+	// Update flips autonomy without touching the program.
+	id := got[0].ID
+	before := got[0]
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", `{"group_id":"g1","autonomy":"notify"}`); w.Code != http.StatusOK {
+		t.Fatalf("update autonomy: got %d, body %s", w.Code, w.Body.String())
+	}
+	after, _ := mgr.Get(context.Background(), "g1", id)
+	if after.Autonomy != "notify" {
+		t.Errorf("autonomy not updated: %q", after.Autonomy)
+	}
+	if after.TlnSource != before.TlnSource {
+		t.Errorf("tln should be unchanged: before=%q after=%q", before.TlnSource, after.TlnSource)
+	}
+
+	// The list summary exposes autonomy.
+	if w := get(h, "/v1/agents?group_id=g1&name=auto-act", "s3cr3t"); !strings.Contains(w.Body.String(), `"autonomy":"notify"`) {
+		t.Errorf("list summary should carry autonomy: %s", w.Body.String())
+	}
+}
+
+func TestAgentConfig_CreateStoreAndUpdate(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+
+	// Create WITH a config blob stores it verbatim and the full GET echoes it.
+	cfg := `{\"template\":\"low_stock_reorder\",\"category\":\"Drills\"}`
+	body := `{"name":"cfg-a","group_id":"g1","entity_id":"u1","tln_source":"workflow \"x\" {}","config":"` + cfg + `"}`
+	if w := post(h, "/v1/agents", "s3cr3t", body); w.Code != http.StatusCreated {
+		t.Fatalf("create with config: got %d, body %s", w.Code, w.Body.String())
+	}
+	got, _ := mgr.QueryAgents(context.Background(), agent.AgentFilter{GroupID: "g1", NameContains: "cfg-a"})
+	if len(got) != 1 || !strings.Contains(got[0].Config, `"template":"low_stock_reorder"`) {
+		t.Fatalf("config not stored: %+v", got)
+	}
+	id := got[0].ID
+	if w := get(h, "/v1/agents/"+id+"?group_id=g1", "s3cr3t"); !strings.Contains(w.Body.String(), `low_stock_reorder`) {
+		t.Errorf("full GET should echo config: %s", w.Body.String())
+	}
+
+	// Update replaces config without touching the program.
+	before := got[0]
+	if w := put(h, "/v1/agents/"+id, "s3cr3t", `{"group_id":"g1","config":"{\"category\":\"Ladders\"}"}`); w.Code != http.StatusOK {
+		t.Fatalf("update config: got %d, body %s", w.Code, w.Body.String())
+	}
+	after, _ := mgr.Get(context.Background(), "g1", id)
+	if !strings.Contains(after.Config, "Ladders") {
+		t.Errorf("config not updated: %q", after.Config)
+	}
+	if after.TlnSource != before.TlnSource {
+		t.Errorf("tln should be unchanged: before=%q after=%q", before.TlnSource, after.TlnSource)
+	}
+}
+
+func TestListAgents_Pagination(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t") // g1 already has one agent ("restock")
+	for _, n := range []string{"p-a", "p-b", "p-c", "p-d"} {
+		if _, err := mgr.Create(context.Background(), agent.Agent{
+			Name: n, GroupID: "gp", EntityID: "u1", Enabled: true, TlnSource: `workflow "x" {}`,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", n, err)
+		}
+	}
+
+	// Page 1 of 2 with per_page=2 → two rows + a pagination block.
+	w := get(h, "/v1/agents?group_id=gp&per_page=2&page=1", "s3cr3t")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Agents     []map[string]any `json:"agents"`
+		Pagination struct {
+			Page       int `json:"page"`
+			PerPage    int `json:"per_page"`
+			Total      int `json:"total"`
+			TotalPages int `json:"total_pages"`
+		} `json:"pagination"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Agents) != 2 {
+		t.Errorf("expected 2 rows on page 1, got %d", len(resp.Agents))
+	}
+	if resp.Pagination.Total != 4 || resp.Pagination.TotalPages != 2 || resp.Pagination.Page != 1 || resp.Pagination.PerPage != 2 {
+		t.Errorf("bad pagination block: %+v", resp.Pagination)
+	}
+
+	// Last page carries the remainder.
+	w = get(h, "/v1/agents?group_id=gp&per_page=2&page=2", "s3cr3t")
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode p2: %v", err)
+	}
+	if len(resp.Agents) != 2 {
+		t.Errorf("expected 2 rows on page 2, got %d", len(resp.Agents))
+	}
+
+	// Without per_page: unpaginated, no pagination block.
+	w = get(h, "/v1/agents?group_id=gp", "s3cr3t")
+	if strings.Contains(w.Body.String(), "pagination") {
+		t.Errorf("no per_page should omit pagination block: %s", w.Body.String())
+	}
+}
+
+func TestListAgents_SortAndAutonomyFilter(t *testing.T) {
+	h, mgr := fixture(t, "s3cr3t")
+	seed := []struct{ name, autonomy string }{
+		{"gamma", "notify"}, {"alpha", "act"}, {"beta", "ask"},
+	}
+	for _, s := range seed {
+		if _, err := mgr.Create(context.Background(), agent.Agent{
+			Name: s.name, GroupID: "gs", EntityID: "u1", TlnSource: `workflow "x" {}`, Autonomy: s.autonomy,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", s.name, err)
+		}
+	}
+
+	names := func(body string) []string {
+		var resp struct {
+			Agents []struct {
+				Name string `json:"name"`
+			} `json:"agents"`
+		}
+		if err := json.Unmarshal([]byte(body), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		out := make([]string, len(resp.Agents))
+		for i, a := range resp.Agents {
+			out[i] = a.Name
+		}
+		return out
+	}
+
+	// Sort by name ascending.
+	got := names(get(h, "/v1/agents?group_id=gs&sort=name&dir=asc", "s3cr3t").Body.String())
+	if len(got) != 3 || got[0] != "alpha" || got[1] != "beta" || got[2] != "gamma" {
+		t.Errorf("name asc: got %v", got)
+	}
+
+	// Sort by name descending.
+	got = names(get(h, "/v1/agents?group_id=gs&sort=name&dir=desc", "s3cr3t").Body.String())
+	if len(got) != 3 || got[0] != "gamma" {
+		t.Errorf("name desc: got %v", got)
+	}
+
+	// Autonomy filter narrows to one row.
+	got = names(get(h, "/v1/agents?group_id=gs&autonomy=ask", "s3cr3t").Body.String())
+	if len(got) != 1 || got[0] != "beta" {
+		t.Errorf("autonomy=ask filter: got %v", got)
+	}
+
+	// Multi-value autonomy (comma-separated → IN) matches any listed value.
+	got = names(get(h, "/v1/agents?group_id=gs&autonomy=ask,act&sort=name&dir=asc", "s3cr3t").Body.String())
+	if len(got) != 2 || got[0] != "alpha" || got[1] != "beta" {
+		t.Errorf("autonomy=ask,act filter: got %v", got)
+	}
+}
