@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -61,8 +62,15 @@ func (h *server) guard(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// maxPerPage caps a single page; keeps a runaway per_page from scanning the
+// whole table in one request.
+const maxPerPage = 100
+
 // handleList serves GET /v1/agents with optional group_id / entity_id /
-// name (substring) / enabled filters, returning agent summaries.
+// name (substring) / enabled filters, returning agent summaries. When
+// per_page is given it paginates (page defaults to 1) and adds a
+// "pagination" block ({page, per_page, total, total_pages}); without it the
+// full match set is returned unpaginated, as before.
 func (h *server) handleList(w http.ResponseWriter, r *http.Request) {
 	if !h.guard(w, r) {
 		return
@@ -72,11 +80,21 @@ func (h *server) handleList(w http.ResponseWriter, r *http.Request) {
 		GroupID:      q.Get("group_id"),
 		EntityID:     q.Get("entity_id"),
 		NameContains: q.Get("name"),
+		Autonomy:     q.Get("autonomy"),
+		SortBy:       q.Get("sort"),
+		SortDir:      q.Get("dir"),
 	}
 	if e := q.Get("enabled"); e != "" {
 		b := e == "true" || e == "1"
 		f.Enabled = &b
 	}
+
+	page, perPage := paginationParams(q)
+	if perPage > 0 {
+		f.Limit = perPage
+		f.Offset = (page - 1) * perPage
+	}
+
 	agents, err := h.mgr.QueryAgents(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -86,7 +104,36 @@ func (h *server) handleList(w http.ResponseWriter, r *http.Request) {
 	for _, a := range agents {
 		summaries = append(summaries, a.Summary())
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"agents": summaries})
+
+	resp := map[string]any{"agents": summaries}
+	if perPage > 0 {
+		total, err := h.mgr.CountAgents(r.Context(), f)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp["pagination"] = map[string]any{
+			"page": page, "per_page": perPage, "total": total,
+			"total_pages": (total + perPage - 1) / perPage,
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// paginationParams reads page/per_page. per_page == 0 means "unpaginated";
+// page is clamped to >= 1 and per_page to <= maxPerPage.
+func paginationParams(q url.Values) (page, perPage int) {
+	page = 1
+	if p, err := strconv.Atoi(q.Get("page")); err == nil && p > 1 {
+		page = p
+	}
+	if pp, err := strconv.Atoi(q.Get("per_page")); err == nil && pp > 0 {
+		perPage = pp
+		if perPage > maxPerPage {
+			perPage = maxPerPage
+		}
+	}
+	return page, perPage
 }
 
 // createRequest is the body of POST /v1/agents. It lets a host app (Timly)
@@ -100,6 +147,8 @@ type createRequest struct {
 	EntityID    string          `json:"entity_id"`
 	TlnSource   string          `json:"tln_source"`
 	Enabled     bool            `json:"enabled"`
+	Autonomy    string          `json:"autonomy"`
+	Config      string          `json:"config"`
 	Triggers    []agent.Trigger `json:"triggers"`
 }
 
@@ -131,6 +180,8 @@ func (h *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		EntityID:    req.EntityID,
 		TlnSource:   req.TlnSource,
 		Enabled:     req.Enabled,
+		Autonomy:    req.Autonomy,
+		Config:      req.Config,
 		Triggers:    req.Triggers,
 	})
 	if err != nil {
@@ -150,6 +201,8 @@ type updateRequest struct {
 	Triggers    []agent.Trigger `json:"triggers"`
 	Name        *string         `json:"name"`
 	Description *string         `json:"description"`
+	Autonomy    *string         `json:"autonomy"`
+	Config      *string         `json:"config"`
 }
 
 // handleUpdate serves PUT /v1/agents/{id} — re-save a draft's Tln and/or flip
@@ -194,6 +247,12 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil && (req.Name != nil || req.Description != nil) {
 		a, err = h.mgr.UpdateMeta(r.Context(), req.GroupID, id, req.Name, req.Description)
+	}
+	if err == nil && req.Autonomy != nil {
+		a, err = h.mgr.UpdateAutonomy(r.Context(), req.GroupID, id, *req.Autonomy)
+	}
+	if err == nil && req.Config != nil {
+		a, err = h.mgr.UpdateConfig(r.Context(), req.GroupID, id, *req.Config)
 	}
 	if err != nil {
 		if errors.Is(err, agent.ErrNotFound) {
@@ -300,6 +359,7 @@ func (h *server) handleGet(w http.ResponseWriter, r *http.Request) {
 		"id": a.ID, "name": a.Name, "description": a.Description,
 		"group_id": a.GroupID, "entity_id": a.EntityID, "enabled": a.Enabled,
 		"tln_source": a.TlnSource, "triggers": a.Triggers,
+		"autonomy": a.Autonomy, "config": a.Config,
 	})
 }
 

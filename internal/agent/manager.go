@@ -37,16 +37,19 @@ func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 	if a.Triggers == nil {
 		a.Triggers = []Trigger{}
 	}
+	if a.Autonomy == "" {
+		a.Autonomy = AutonomyDefault
+	}
 	triggers, err := json.Marshal(a.Triggers)
 	if err != nil {
 		return Agent{}, fmt.Errorf("agent create: encode triggers: %w", err)
 	}
 	q := m.db.Dialect.Rebind(`INSERT INTO agents
-		(id, name, description, group_id, entity_id, tln_source, triggers_json, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(id, name, description, group_id, entity_id, tln_source, triggers_json, enabled, autonomy, config, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err = m.db.SQL().ExecContext(ctx, q,
 		a.ID, a.Name, a.Description, a.GroupID, a.EntityID, a.TlnSource,
-		string(triggers), boolToInt(a.Enabled), now.Format(timeFmt), now.Format(timeFmt))
+		string(triggers), boolToInt(a.Enabled), a.Autonomy, a.Config, now.Format(timeFmt), now.Format(timeFmt))
 	if err != nil {
 		return Agent{}, fmt.Errorf("agent create: %w", err)
 	}
@@ -56,7 +59,7 @@ func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 // List returns all agents in the group, newest first.
 func (m *Manager) List(ctx context.Context, groupID string) ([]Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, created_at, updated_at FROM agents
+		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents
 		WHERE group_id = ? ORDER BY created_at DESC`)
 	rows, err := m.db.SQL().QueryContext(ctx, q, groupID)
 	if err != nil {
@@ -98,7 +101,7 @@ func (m *Manager) ListEnabledEventAgents(ctx context.Context, groupID, eventType
 // Get resolves an agent by id or name within the group.
 func (m *Manager) Get(ctx context.Context, groupID, idOrName string) (Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, created_at, updated_at FROM agents
+		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents
 		WHERE group_id = ? AND (id = ? OR name = ?) LIMIT 1`)
 	row := m.db.SQL().QueryRowContext(ctx, q, groupID, idOrName, idOrName)
 	a, err := scanAgent(row)
@@ -170,6 +173,42 @@ func (m *Manager) UpdateMeta(ctx context.Context, groupID, idOrName string, name
 	if _, err := m.db.SQL().ExecContext(ctx, q, a.Name, a.Description, now.Format(timeFmt), a.ID); err != nil {
 		return Agent{}, fmt.Errorf("agent meta update: %w", err)
 	}
+	a.UpdatedAt = now
+	return a, nil
+}
+
+// UpdateAutonomy sets an agent's autonomy level ("notify" | "ask" | "act")
+// without touching its program, triggers, or meta. Used by the host wizard's
+// autonomy step.
+func (m *Manager) UpdateAutonomy(ctx context.Context, groupID, idOrName, autonomy string) (Agent, error) {
+	a, err := m.Get(ctx, groupID, idOrName)
+	if err != nil {
+		return Agent{}, err
+	}
+	now := time.Now().UTC()
+	q := m.db.Dialect.Rebind(`UPDATE agents SET autonomy = ?, updated_at = ? WHERE id = ?`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, autonomy, now.Format(timeFmt), a.ID); err != nil {
+		return Agent{}, fmt.Errorf("agent autonomy update: %w", err)
+	}
+	a.Autonomy = autonomy
+	a.UpdatedAt = now
+	return a, nil
+}
+
+// UpdateConfig replaces an agent's opaque wizard-config blob without touching
+// its program, triggers, or meta. Used by the host wizard so a draft can be
+// reopened and edited from the stored selections.
+func (m *Manager) UpdateConfig(ctx context.Context, groupID, idOrName, config string) (Agent, error) {
+	a, err := m.Get(ctx, groupID, idOrName)
+	if err != nil {
+		return Agent{}, err
+	}
+	now := time.Now().UTC()
+	q := m.db.Dialect.Rebind(`UPDATE agents SET config = ?, updated_at = ? WHERE id = ?`)
+	if _, err := m.db.SQL().ExecContext(ctx, q, config, now.Format(timeFmt), a.ID); err != nil {
+		return Agent{}, fmt.Errorf("agent config update: %w", err)
+	}
+	a.Config = config
 	a.UpdatedAt = now
 	return a, nil
 }
@@ -436,20 +475,62 @@ func scanAgentJoinedTime(s scanner) (Agent, *time.Time, error) {
 	return a, parseNullTime(nextPoll), nil
 }
 
+// inClause appends `AND <col> IN (?, ?, …)` for a comma-separated value
+// (trimmed, blanks dropped) and returns the extended args. A single value is
+// IN with one element (same as `=`); an empty csv is a no-op. col is a fixed
+// literal from the caller (never user input), so this is injection-safe.
+func inClause(q, col, csv string, args []any) (string, []any) {
+	var parts []string
+	for _, p := range strings.Split(csv, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	if len(parts) == 0 {
+		return q, args
+	}
+	placeholders := make([]string, len(parts))
+	for i, p := range parts {
+		placeholders[i] = "?"
+		args = append(args, p)
+	}
+	return q + " AND " + col + " IN (" + strings.Join(placeholders, ", ") + ")", args
+}
+
+// orderClause builds a safe ORDER BY from a whitelisted sort column and
+// direction, defaulting to newest-first. The column comes from a fixed map
+// (never interpolated from raw input) and the direction is a literal, so the
+// result is injection-safe. A created_at tiebreaker keeps paging stable.
+func orderClause(sortBy, sortDir string) string {
+	cols := map[string]string{
+		"name":       "LOWER(name)",
+		"enabled":    "enabled",
+		"autonomy":   "autonomy",
+		"created_at": "created_at",
+		"updated_at": "updated_at",
+	}
+	col, ok := cols[sortBy]
+	if !ok {
+		return " ORDER BY created_at DESC"
+	}
+	dir := "ASC"
+	if strings.EqualFold(sortDir, "desc") {
+		dir = "DESC"
+	}
+	return " ORDER BY " + col + " " + dir + ", created_at DESC"
+}
+
 // QueryAgents lists agents matching the filter (all fields AND-combined),
-// newest first. Used by the read-only query API.
+// ordered by the filter's sort (default newest-first). Used by the query API.
 func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, error) {
 	q := `SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, created_at, updated_at FROM agents WHERE 1=1`
+		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents WHERE 1=1`
 	var args []any
 	if f.GroupID != "" {
 		q += " AND group_id = ?"
 		args = append(args, f.GroupID)
 	}
-	if f.EntityID != "" {
-		q += " AND entity_id = ?"
-		args = append(args, f.EntityID)
-	}
+	q, args = inClause(q, "entity_id", f.EntityID, args)
 	if f.NameContains != "" {
 		q += " AND LOWER(name) LIKE ?"
 		args = append(args, "%"+strings.ToLower(f.NameContains)+"%")
@@ -458,7 +539,12 @@ func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, erro
 		q += " AND enabled = ?"
 		args = append(args, boolToInt(*f.Enabled))
 	}
-	q += " ORDER BY created_at DESC"
+	q, args = inClause(q, "autonomy", f.Autonomy, args)
+	q += orderClause(f.SortBy, f.SortDir)
+	if f.Limit > 0 {
+		q += " LIMIT ? OFFSET ?"
+		args = append(args, f.Limit, f.Offset)
+	}
 
 	rows, err := m.db.SQL().QueryContext(ctx, m.db.Dialect.Rebind(q), args...)
 	if err != nil {
@@ -476,11 +562,38 @@ func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, erro
 	return out, rows.Err()
 }
 
+// CountAgents returns how many agents match the filter, applying the same
+// WHERE as QueryAgents but ignoring Limit/Offset — the total a paginated
+// list needs to render its pager.
+func (m *Manager) CountAgents(ctx context.Context, f AgentFilter) (int, error) {
+	q := `SELECT COUNT(*) FROM agents WHERE 1=1`
+	var args []any
+	if f.GroupID != "" {
+		q += " AND group_id = ?"
+		args = append(args, f.GroupID)
+	}
+	q, args = inClause(q, "entity_id", f.EntityID, args)
+	if f.NameContains != "" {
+		q += " AND LOWER(name) LIKE ?"
+		args = append(args, "%"+strings.ToLower(f.NameContains)+"%")
+	}
+	if f.Enabled != nil {
+		q += " AND enabled = ?"
+		args = append(args, boolToInt(*f.Enabled))
+	}
+	q, args = inClause(q, "autonomy", f.Autonomy, args)
+	var n int
+	if err := m.db.SQL().QueryRowContext(ctx, m.db.Dialect.Rebind(q), args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("agent count: %w", err)
+	}
+	return n, nil
+}
+
 // GetByID resolves an agent by id across all groups (used by the tick
 // engine, which is unscoped).
 func (m *Manager) GetByID(ctx context.Context, id string) (Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, created_at, updated_at FROM agents WHERE id = ? LIMIT 1`)
+		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents WHERE id = ? LIMIT 1`)
 	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Agent{}, ErrNotFound
@@ -497,7 +610,7 @@ func (m *Manager) WebhookAgent(ctx context.Context, userID, idOrName string) (Ag
 		return Agent{}, ErrNotFound
 	}
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, created_at, updated_at FROM agents
+		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents
 		WHERE enabled = 1 AND entity_id = ? AND (id = ? OR name = ?) LIMIT 1`)
 	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, userID, idOrName, idOrName))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -656,7 +769,7 @@ func scanAgent(s scanner) (Agent, error) {
 		updated  string
 	)
 	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TlnSource,
-		&triggers, &enabled, &created, &updated); err != nil {
+		&triggers, &enabled, &a.Autonomy, &a.Config, &created, &updated); err != nil {
 		return Agent{}, err
 	}
 	if triggers != "" {

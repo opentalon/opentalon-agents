@@ -35,7 +35,7 @@ func TestOpen_MigratesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("first open: %v", err)
 	}
 	v, err := db.currentVersion()
-	if err != nil || v != 4 {
+	if err != nil || v != 6 {
 		t.Fatalf("version after migrate: %d, %v", v, err)
 	}
 	// All tables should exist.
@@ -52,8 +52,8 @@ func TestOpen_MigratesAndIsIdempotent(t *testing.T) {
 		t.Fatalf("second open: %v", err)
 	}
 	defer func() { _ = db2.Close() }()
-	if v, _ := db2.currentVersion(); v != 4 {
-		t.Errorf("version should stay 4 on reopen, got %d", v)
+	if v, _ := db2.currentVersion(); v != 6 {
+		t.Errorf("version should stay 6 on reopen, got %d", v)
 	}
 }
 

@@ -20,8 +20,16 @@ type Agent struct {
 	TlnSource   string    `json:"tln_source"`
 	Triggers    []Trigger `json:"triggers,omitempty"`
 	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Autonomy is how much the workflow may do on its own:
+	// "notify" | "ask" | "act". Set by the host wizard; defaults to "ask".
+	Autonomy string `json:"autonomy,omitempty"`
+	// Config is an opaque JSON blob of the host wizard's structured selections
+	// (template key + slot values), stored verbatim and echoed back so the host
+	// can rehydrate its editor. The plugin never interprets or queries it; the
+	// executable artifact is TlnSource.
+	Config    string    `json:"config,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Trigger describes when an agent should fire. Type is one of
@@ -33,6 +41,14 @@ type Trigger struct {
 	Cron   string          `json:"cron,omitempty"`   // type == schedule
 	Config json.RawMessage `json:"config,omitempty"` // type-specific payload (e.g. PollConfig)
 }
+
+// Autonomy values — how much a workflow may do on its own.
+const (
+	AutonomyNotify  = "notify" // report findings only, never act
+	AutonomyAsk     = "ask"    // propose the action, wait for the user's OK
+	AutonomyAct     = "act"    // act on its own, then report
+	AutonomyDefault = AutonomyAsk
+)
 
 // TriggerType values.
 const (
@@ -234,6 +250,7 @@ type AgentSummary struct {
 	GroupID      string    `json:"group_id"`
 	EntityID     string    `json:"entity_id,omitempty"`
 	Enabled      bool      `json:"enabled"`
+	Autonomy     string    `json:"autonomy,omitempty"`
 	TriggerTypes []string  `json:"trigger_types"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -247,7 +264,7 @@ func (a Agent) Summary() AgentSummary {
 	return AgentSummary{
 		ID: a.ID, Name: a.Name, Description: a.Description,
 		GroupID: a.GroupID, EntityID: a.EntityID, Enabled: a.Enabled,
-		TriggerTypes: types, UpdatedAt: a.UpdatedAt,
+		Autonomy: a.Autonomy, TriggerTypes: types, UpdatedAt: a.UpdatedAt,
 	}
 }
 
@@ -255,9 +272,19 @@ func (a Agent) Summary() AgentSummary {
 // set fields are AND-combined.
 type AgentFilter struct {
 	GroupID      string
-	EntityID     string
+	EntityID     string // comma-separated → matches any (IN); single value → exact
 	NameContains string // case-insensitive substring match on name
 	Enabled      *bool
+	Autonomy     string // comma-separated → matches any of "notify" | "ask" | "act" (IN)
+	// SortBy/SortDir order the result via orderClause (whitelisted column +
+	// asc/desc); empty = newest-first (created_at DESC).
+	SortBy  string
+	SortDir string
+	// Limit/Offset paginate the result. Limit <= 0 means "no pagination"
+	// (return every match); Offset is ignored then. CountAgents applies the
+	// same WHERE while ignoring Limit/Offset, for the total.
+	Limit  int
+	Offset int
 }
 
 // AgentState is the restart-safe watcher state for one agent (Phase 2),
