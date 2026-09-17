@@ -188,21 +188,36 @@ func (e *Engine) drainPending(ctx context.Context, host pkg.HostCaller, now time
 // as the agent owner, records the run, and notifies. The event payload is kept
 // as the run's Event for history; passing it into the program as event.* is a
 // follow-up (tln has no context-injection option yet).
-func (e *Engine) runEventWorkflow(ctx context.Context, host pkg.HostCaller, a agent.Agent, ev agent.PendingEvent, now time.Time) (int, error) {
-	result, runErr := e.tln.Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID})
+func (e *Engine) runEventWorkflow(ctx context.Context, host pkg.HostCaller, a agent.Agent, ev agent.PendingEvent, now time.Time, dryRun bool) (int, error) {
+	// A dry run reads real data but performs no writes (the executor skips them),
+	// is tagged as its own trigger kind so run history can tell it from a live
+	// run, and does NOT notify the owner (it's a silent preview).
+	trigger := agent.TriggerEvent
+	if dryRun {
+		trigger = agent.TriggerDryRun
+	}
+	result, runErr := e.tln.Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID, DryRun: dryRun})
 	started := now
-	run := agent.Run{AgentID: a.ID, TriggerType: agent.TriggerEvent, Event: ev.Payload, StartedAt: &started, FinishedAt: &started}
+	run := agent.Run{AgentID: a.ID, TriggerType: trigger, Event: ev.Payload, StartedAt: &started, FinishedAt: &started}
 	if runErr != nil {
 		run.Status = agent.StatusFailed
 		run.Error = runErr.Error()
-		_, _ = e.mgr.CreateRun(ctx, run)
-		e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerEvent, Error: runErr.Error()}, now)
+		if _, err := e.mgr.CreateRun(ctx, run); err != nil {
+			slog.Warn("opentalon-agents: run persist failed", "agent", a.ID, "trigger", trigger, "status", "failed", "error", err)
+		}
+		if !dryRun {
+			e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerEvent, Error: runErr.Error()}, now)
+		}
 		return 0, runErr
 	}
 	run.Status = agent.StatusCompleted
 	run.Result = resultJSON(result)
-	_, _ = e.mgr.CreateRun(ctx, run)
-	e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerEvent, Result: run.Result}, now)
+	if _, err := e.mgr.CreateRun(ctx, run); err != nil {
+		slog.Warn("opentalon-agents: run persist failed", "agent", a.ID, "trigger", trigger, "status", "completed", "error", err)
+	}
+	if !dryRun {
+		e.maybeNotify(ctx, host, a, notifyEvent{Trigger: agent.TriggerEvent, Result: run.Result}, now)
+	}
 	return 1, nil
 }
 
@@ -212,6 +227,12 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	if err != nil {
 		return 0, fmt.Errorf("load agent: %w", err)
 	}
+	// A dry run is a preview — allowed even for a disabled/draft agent (you
+	// preview BEFORE activating), and it changes nothing since writes are
+	// skipped downstream. Handled before the enabled gate for that reason.
+	if ev.Kind == agent.EventKindDryRun {
+		return e.runEventWorkflow(ctx, host, a, ev, now, true)
+	}
 	if !a.Enabled {
 		return 0, nil // dropped: agent disabled since the event arrived
 	}
@@ -219,7 +240,7 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 	// Domain events now arrive as EventKindFacts carrying a pre-mapped facts
 	// array, so their detect/on rules evaluate with the record bound.
 	if ev.Kind == agent.EventKindRun {
-		return e.runEventWorkflow(ctx, host, a, ev, now)
+		return e.runEventWorkflow(ctx, host, a, ev, now, false)
 	}
 	wc, ok := a.WebhookTrigger()
 	if !ok {
@@ -232,7 +253,7 @@ func (e *Engine) applyEvent(ctx context.Context, host pkg.HostCaller, ev agent.P
 		if rerr == nil && reactive {
 			return e.applyDomainFacts(ctx, host, a, ev, now)
 		}
-		return e.runEventWorkflow(ctx, host, a, ev, now)
+		return e.runEventWorkflow(ctx, host, a, ev, now, false)
 	}
 	var body any
 	if err := json.Unmarshal(ev.Payload, &body); err != nil {

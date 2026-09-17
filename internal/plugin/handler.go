@@ -204,6 +204,15 @@ func (h *Handler) ExecuteWithCallbacks(ctx context.Context, req pkg.Request, hos
 		return h.actionValidate(ctx, req, host)
 	case "run":
 		return h.actionRun(ctx, req, host, rc)
+	case "dry_run":
+		// Simulate: reads execute, writes are skipped. Changes nothing, so the
+		// action is ReadOnly (no confirmation gate) — a single http-channel turn
+		// can run it. Reuses actionRun with the flag forced on.
+		if req.Args == nil {
+			req.Args = map[string]string{}
+		}
+		req.Args["dry_run"] = "true"
+		return h.actionRun(ctx, req, host, rc)
 	case "update":
 		return h.actionUpdate(ctx, req, host, rc)
 	case "enable":
@@ -373,14 +382,23 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 		return errResp(req.ID, err.Error())
 	}
 
-	run, err := h.mgr.CreateRun(ctx, agent.Run{AgentID: a.ID, TriggerType: "llm", Status: agent.StatusRunning})
+	// A dry run reads real data but performs NO writes (the executor skips them).
+	// Tagged as its own trigger kind so run history can tell dry from live.
+	dryRun := req.Args["dry_run"] == "true"
+	triggerType := "llm"
+	if dryRun {
+		triggerType = agent.TriggerDryRun
+	}
+
+	run, err := h.mgr.CreateRun(ctx, agent.Run{AgentID: a.ID, TriggerType: triggerType, Status: agent.StatusRunning})
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
 	started := time.Now().UTC()
 	run.StartedAt = &started
 
-	result, runErr := h.currentTln().Run(ctx, host, a.TlnSource, Identity{EntityID: a.EntityID, GroupID: a.GroupID})
+	result, runErr := h.currentTln().Run(ctx, host, a.TlnSource,
+		Identity{EntityID: a.EntityID, GroupID: a.GroupID, DryRun: dryRun})
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 
@@ -395,9 +413,13 @@ func (h *Handler) actionRun(ctx context.Context, req pkg.Request, host pkg.HostC
 	if err := h.mgr.FinishRun(ctx, run); err != nil {
 		slog.Warn("opentalon-agents: persist run failed", "run_id", run.ID, "error", err)
 	}
+	verb := "Ran"
+	if dryRun {
+		verb = "Dry-ran"
+	}
 	return pkg.Response{
 		CallID:            req.ID,
-		Content:           fmt.Sprintf("Ran agent %q (run %s): %s", a.Name, run.ID, result.Content),
+		Content:           fmt.Sprintf("%s agent %q (run %s): %s", verb, a.Name, run.ID, result.Content),
 		StructuredContent: result.StructuredContent,
 	}
 }

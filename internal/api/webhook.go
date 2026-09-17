@@ -34,6 +34,8 @@ func NewServer(cfg *config.Config, mgr *agent.Manager) http.Handler {
 	mux.HandleFunc("DELETE /v1/agents/{id}", h.handleDelete)
 	mux.HandleFunc("GET /v1/agents/runs", h.handleLatestRuns)
 	mux.HandleFunc("GET /v1/agents/{id}/runs", h.handleRuns)
+	mux.HandleFunc("GET /v1/agents/{id}/stats", h.handleStats)
+	mux.HandleFunc("POST /v1/agents/{id}/dry_run", h.handleDryRun)
 	mux.HandleFunc("GET /v1/agents/{id}", h.handleGet)
 	return mux
 }
@@ -336,6 +338,43 @@ func (h *server) handleRuns(w http.ResponseWriter, r *http.Request) {
 // the list, which omits the program): includes tln_source + triggers so the
 // Timly wizard can prefill the editor with the real definition. group_id scopes
 // the lookup.
+// handleDryRun serves POST /v1/agents/{id}/dry_run?group_id=X — enqueue a
+// SIMULATION of the agent's program. The engine runs it on the next tick with
+// writes skipped (reads execute against real data), records it as a dry_run in
+// the run history, and changes nothing. The host (Timly) polls GET .../runs for
+// the result. Async because the HTTP layer has no HostCaller — only the engine
+// tick does. Allowed for a disabled/draft agent too (preview before activating).
+func (h *server) handleDryRun(w http.ResponseWriter, r *http.Request) {
+	if !h.guard(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	groupID := r.URL.Query().Get("group_id")
+	if groupID == "" {
+		writeErr(w, http.StatusBadRequest, "group_id is required")
+		return
+	}
+	a, err := h.mgr.Get(r.Context(), groupID, id)
+	if err != nil {
+		if errors.Is(err, agent.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "agent not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	ev, err := h.mgr.EnqueueEvent(r.Context(), agent.PendingEvent{
+		AgentID:        a.ID,
+		Kind:           agent.EventKindDryRun,
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued", "agent_id": a.ID, "event_id": ev.ID})
+}
+
 func (h *server) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !h.guard(w, r) {
 		return

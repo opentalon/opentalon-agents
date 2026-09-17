@@ -27,6 +27,7 @@ type Identity struct {
 	EntityID  string // agent owner — the Timly user id (agent.EntityID)
 	GroupID   string // agent tenant — the Timly entity id (agent.GroupID)
 	SessionID string // optional originating session
+	DryRun    bool   // simulate: reads execute, writes are skipped by the executor
 }
 
 // Reserved callback arg keys. MUST stay in lockstep with
@@ -51,6 +52,12 @@ func (id Identity) apply(args map[string]string) map[string]string {
 	}
 	if id.SessionID != "" {
 		args[cbSessionIDArg] = id.SessionID
+	}
+	// Plain (non-reserved) key: tln-plugin.execute_workflow reads it directly and
+	// propagates it to each tool call, where the executor skips writes. Core's
+	// handleCallback leaves unknown keys untouched, so it survives the hop.
+	if id.DryRun {
+		args["dry_run"] = "true"
 	}
 	return args
 }
