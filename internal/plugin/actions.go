@@ -90,8 +90,18 @@ func actions() []pkg.ActionMsg {
 		},
 		{
 			Name:              "run",
-			Description:       "Run an agent's program now (inline), returning the result. Records a run.",
+			Description:       "Run an agent's program now (inline), returning the result. Records a run. Pass dry_run=true to simulate: read operations execute against real data, but write operations are NOT performed — each reports what it WOULD have done instead.",
 			InjectContextArgs: injected,
+			Parameters: []pkg.ParameterMsg{
+				idParam,
+				{Name: "dry_run", Description: "Optional. If \"true\", simulate the run: reads execute, writes are skipped and report what they would have done.", Type: "string", Required: false},
+			},
+		},
+		{
+			Name:              "dry_run",
+			Description:       "Simulate an agent's program against REAL data without changing anything: read operations execute, but every write (create/update/delete/notify) is SKIPPED and reports what it WOULD have done. Records a dry run. Use this to preview a workflow's effect safely. Changes nothing, so it needs no confirmation.",
+			InjectContextArgs: injected,
+			ReadOnly:          true,
 			Parameters:        []pkg.ParameterMsg{idParam},
 		},
 		{

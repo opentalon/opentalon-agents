@@ -57,6 +57,7 @@ const (
 	TriggerPoll     = "poll"
 	TriggerWebhook  = "webhook"
 	TriggerEvent    = "event"
+	TriggerDryRun   = "dry_run" // a simulation run: reads execute, writes skipped
 )
 
 // PollConfig is the `config` payload of a poll trigger: which MCP tool to
@@ -192,6 +193,10 @@ const (
 	EventKindFacts = "facts"
 	// EventKindRun: run the agent's workflow with the payload (event triggers).
 	EventKindRun = "run"
+	// EventKindDryRun: run the agent's workflow as a SIMULATION — reads execute,
+	// writes are skipped. Enqueued by POST /v1/agents/{id}/dry_run so a host app
+	// can preview a workflow's effect on the next tick without changing anything.
+	EventKindDryRun = "dry_run"
 )
 
 // Run is one execution of an agent.
