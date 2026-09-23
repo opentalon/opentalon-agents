@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,39 +28,86 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := store.Open(cfg.DB.Driver, cfg.DB.DSN)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "opentalon-agents: open db: %v\n", err)
-		os.Exit(1)
+	// The host does NOT set OPENTALON_CONFIG on this subprocess — it delivers
+	// configuration through Init, which reaches Handler.Configure. Opening the
+	// store here would therefore always use the startup defaults (sqlite at
+	// ./agents.db), and where the working directory is not writable — a
+	// container with a read-only root filesystem, for instance — that fails
+	// outright and the process exits before the handshake. The host then sees
+	// "plugin closed stdout before handshake" and retries forever.
+	//
+	// So open eagerly only when this process was actually handed a config of its
+	// own (standalone runs), and otherwise let Configure open the store the host
+	// names. The webhook server starts with it, since it needs the manager.
+	var (
+		dbMu sync.Mutex
+		db   *store.DB
+	)
+	closeDB := func() {
+		dbMu.Lock()
+		defer dbMu.Unlock()
+		if db != nil {
+			_ = db.Close()
+			db = nil
+		}
 	}
-	defer func() { _ = db.Close() }()
-
-	mgr := agent.NewManager(db)
-	handler := aplugin.NewHandler(cfg, mgr)
+	defer closeDB()
 
 	// Webhook ingress: when the host grants an HTTP port (expose_http),
 	// serve the webhook endpoint on the private loopback listener it
 	// reverse-proxies. It only enqueues; the tick drains it.
-	if port := os.Getenv("OPENTALON_HTTP_PORT"); port != "" {
-		srv := &http.Server{
-			Addr:              "127.0.0.1:" + port,
-			Handler:           api.NewWebhookServer(cfg, mgr),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			slog.Info("opentalon-agents: webhook server listening", "addr", srv.Addr, "enabled", cfg.WebhookSecret != "")
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("opentalon-agents: webhook server", "error", err)
+	var webhookOnce sync.Once
+	startWebhook := func(mgr *agent.Manager) {
+		webhookOnce.Do(func() {
+			port := os.Getenv("OPENTALON_HTTP_PORT")
+			if port == "" {
+				return
 			}
-		}()
+			srv := &http.Server{
+				Addr:              "127.0.0.1:" + port,
+				Handler:           api.NewWebhookServer(cfg, mgr),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			go func() {
+				slog.Info("opentalon-agents: webhook server listening", "addr", srv.Addr, "enabled", cfg.WebhookSecret != "")
+				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					slog.Error("opentalon-agents: webhook server", "error", err)
+				}
+			}()
+		})
 	}
+
+	openStore := func(driver, dsn string) (*agent.Manager, error) {
+		d, err := store.Open(driver, dsn)
+		if err != nil {
+			return nil, err
+		}
+		dbMu.Lock()
+		db = d
+		dbMu.Unlock()
+		mgr := agent.NewManager(d)
+		startWebhook(mgr)
+		return mgr, nil
+	}
+
+	var mgr *agent.Manager
+	if os.Getenv("OPENTALON_CONFIG") != "" {
+		mgr, err = openStore(cfg.DB.Driver, cfg.DB.DSN)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "opentalon-agents: open db: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	handler := aplugin.NewHandler(cfg, mgr)
+	handler.SetStoreOpener(openStore)
 
 	// Exit cleanly on termination so the deferred db.Close runs.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		_ = db.Close()
+		closeDB()
 		os.Exit(0)
 	}()
 

@@ -35,6 +35,25 @@ type Handler struct {
 	mgr    *agent.Manager
 	tln    tlnProxy
 	engine *Engine
+	// openStore opens the store for a configuration the host delivers, for the
+	// case where the process had none of its own at startup. Set by main via
+	// SetStoreOpener; nil in tests that construct a handler around a manager.
+	openStore StoreOpener
+}
+
+// StoreOpener opens the agent store and returns a manager over it. It exists so
+// this package does not have to import the store package, and so the binary
+// keeps ownership of the handle it has to close on shutdown.
+type StoreOpener func(driver, dsn string) (*agent.Manager, error)
+
+// SetStoreOpener lets the binary hand the handler a way to open the store once
+// the host has said which one to use. Without it a handler built with no
+// manager can only fail Configure, which is better than failing at startup
+// against a default that was never meant to apply.
+func (h *Handler) SetStoreOpener(f StoreOpener) {
+	h.mu.Lock()
+	h.openStore = f
+	h.mu.Unlock()
 }
 
 // NewHandler wires the handler.
@@ -116,7 +135,24 @@ func (h *Handler) Configure(configJSON string) error {
 		return fmt.Errorf("agents: configure: %w", err)
 	}
 	h.mu.Lock()
-	if parsed.DB.DSN != h.cfg.DB.DSN || parsed.DB.Driver != h.cfg.DB.Driver {
+	switch {
+	case h.mgr == nil:
+		// No store yet: this process was started without a configuration of its
+		// own, which is the normal case under the host. Open the one it just
+		// named. This is the only point at which a host-supplied DSN can take
+		// effect at all.
+		if h.openStore == nil {
+			h.mu.Unlock()
+			return fmt.Errorf("agents: configure: no store and no way to open one")
+		}
+		mgr, err := h.openStore(parsed.DB.Driver, parsed.DB.DSN)
+		if err != nil {
+			h.mu.Unlock()
+			return fmt.Errorf("agents: configure: open store (driver %q): %w", parsed.DB.Driver, err)
+		}
+		h.mgr = mgr
+		slog.Info("opentalon-agents: store opened from host configuration", "driver", parsed.DB.Driver)
+	case parsed.DB.DSN != h.cfg.DB.DSN || parsed.DB.Driver != h.cfg.DB.Driver:
 		slog.Warn("opentalon-agents: DB config in Configure differs from startup, live DB handle unchanged",
 			"startup_driver", h.cfg.DB.Driver, "startup_dsn", h.cfg.DB.DSN,
 			"configured_driver", parsed.DB.Driver, "configured_dsn", parsed.DB.DSN)
