@@ -85,10 +85,10 @@ func main() {
 		dbMu.Lock()
 		db = d
 		dbMu.Unlock()
-		mgr := agent.NewManager(d)
-		startWebhook(mgr)
-		return mgr, nil
+		return agent.NewManager(d), nil
 	}
+
+	var curMgr *agent.Manager
 
 	var mgr *agent.Manager
 	if os.Getenv("OPENTALON_CONFIG") != "" {
@@ -100,7 +100,25 @@ func main() {
 	}
 
 	handler := aplugin.NewHandler(cfg, mgr)
-	handler.SetStoreOpener(openStore)
+	handler.SetStoreOpener(func(driver, dsn string) (*agent.Manager, error) {
+		m, err := openStore(driver, dsn)
+		if err != nil {
+			return nil, err
+		}
+		curMgr = m
+		return m, nil
+	})
+	// The webhook server reads cfg at construction — webhook_secret decides
+	// whether its endpoints answer at all. Start it only after a Configure has
+	// applied, so it sees what the host sent rather than the startup defaults.
+	// cfg is the same struct Configure writes into, so no copy is needed here.
+	handler.SetConfiguredHook(func() { startWebhook(curMgr) })
+	if mgr != nil {
+		// Standalone: this process had its own configuration, so there is
+		// nothing to wait for.
+		curMgr = mgr
+		startWebhook(mgr)
+	}
 
 	// Exit cleanly on termination so the deferred db.Close runs.
 	sigCh := make(chan os.Signal, 1)

@@ -100,3 +100,61 @@ func TestConfigureKeepsExistingStore(t *testing.T) {
 		t.Fatal("live manager was replaced")
 	}
 }
+
+// The hook has to run after the delivered configuration is in effect, not
+// before: anything started from it reads config at construction, and the
+// webhook server is useless if it captures the startup defaults and finds no
+// webhook_secret there.
+func TestConfiguredHookSeesAppliedConfig(t *testing.T) {
+	cfg, _ := config.Parse("")
+	h := NewHandler(cfg, nil)
+	h.SetStoreOpener(func(driver, dsn string) (*agent.Manager, error) {
+		db, err := store.Open(driver, dsn)
+		if err != nil {
+			return nil, err
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return agent.NewManager(db), nil
+	})
+
+	var seenSecret, seenTln string
+	calls := 0
+	h.SetConfiguredHook(func() {
+		calls++
+		seenSecret = cfg.WebhookSecret
+		seenTln = cfg.TlnPluginName
+	})
+
+	dsn := filepath.Join(t.TempDir(), "agents.db")
+	payload, _ := json.Marshal(map[string]any{
+		"db":              map[string]string{"driver": "sqlite", "dsn": dsn},
+		"tln_plugin_name": "tln",
+		"webhook_secret":  "s3cret",
+	})
+	if err := h.Configure(string(payload)); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("hook ran %d times, want 1", calls)
+	}
+	if seenSecret != "s3cret" {
+		t.Errorf("hook saw webhook_secret %q, want the delivered one", seenSecret)
+	}
+	if seenTln != "tln" {
+		t.Errorf("hook saw tln_plugin_name %q, want the delivered one", seenTln)
+	}
+}
+
+// No hook set is not an error.
+func TestConfigureWithoutHook(t *testing.T) {
+	cfg, _ := config.Parse("")
+	db, err := store.Open("sqlite", filepath.Join(t.TempDir(), "a.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	h := NewHandler(cfg, agent.NewManager(db))
+	if err := h.Configure(`{"tln_plugin_name":"tln"}`); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+}

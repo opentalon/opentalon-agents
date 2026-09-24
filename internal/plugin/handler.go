@@ -39,6 +39,11 @@ type Handler struct {
 	// case where the process had none of its own at startup. Set by main via
 	// SetStoreOpener; nil in tests that construct a handler around a manager.
 	openStore StoreOpener
+	// onConfigured runs after a Configure has applied, outside the lock. It is
+	// where the binary starts anything that has to read the configuration the
+	// host actually sent — the webhook server, for one, which is worthless if
+	// it captures the startup config and finds no webhook_secret in it.
+	onConfigured func()
 }
 
 // StoreOpener opens the agent store and returns a manager over it. It exists so
@@ -53,6 +58,16 @@ type StoreOpener func(driver, dsn string) (*agent.Manager, error)
 func (h *Handler) SetStoreOpener(f StoreOpener) {
 	h.mu.Lock()
 	h.openStore = f
+	h.mu.Unlock()
+}
+
+// SetConfiguredHook registers a callback to run after each successful
+// Configure, once the delivered configuration is in effect. Anything that
+// reads config at construction time belongs here rather than in the store
+// opener, which necessarily runs first.
+func (h *Handler) SetConfiguredHook(f func()) {
+	h.mu.Lock()
+	h.onConfigured = f
 	h.mu.Unlock()
 }
 
@@ -168,8 +183,12 @@ func (h *Handler) Configure(configJSON string) error {
 	// Configure would otherwise overwrite them underneath it.
 	engineCfg := *parsed
 	h.engine = NewEngine(&engineCfg, h.mgr)
+	hook := h.onConfigured
 	h.mu.Unlock()
 	slog.Info("opentalon-agents: configured", "tln_plugin", parsed.TlnPluginName, "db_driver", parsed.DB.Driver, "default_group_id", parsed.DefaultGroupID)
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 
