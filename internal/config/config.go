@@ -66,6 +66,16 @@ type Config struct {
 	// to author agents from a local console/telegram/slack chat. Unset =
 	// fail-closed: a call with no group_id is rejected, exactly as before.
 	DefaultGroupID string `json:"default_group_id"`
+
+	// HostDBDriver and HostDBDSN are what the host injects when the plugin is
+	// configured with db_access: true — the state store's own credentials,
+	// already expanded. They are the host's way of saying "use my database",
+	// and they are used only when db: says nothing, so an explicit db: still
+	// wins. Reading them means the DSN does not have to be repeated in the
+	// plugin's own config, where it would also have to survive the host's
+	// environment substitution.
+	HostDBDriver string `json:"__db_driver"`
+	HostDBDSN    string `json:"__db_dsn"`
 }
 
 // DBConfig selects the storage backend.
@@ -82,6 +92,12 @@ func Parse(jsonStr string) (*Config, error) {
 		if err := json.Unmarshal([]byte(jsonStr), cfg); err != nil {
 			return nil, fmt.Errorf("agents: parse config: %w", err)
 		}
+	}
+	// An explicit db: wins. Otherwise take what db_access injected, and only
+	// then fall back to the sqlite default.
+	if cfg.DB.Driver == "" && cfg.DB.DSN == "" && cfg.HostDBDSN != "" {
+		cfg.DB.Driver = cfg.HostDBDriver
+		cfg.DB.DSN = cfg.HostDBDSN
 	}
 	if cfg.DB.Driver == "" {
 		cfg.DB.Driver = "sqlite"
