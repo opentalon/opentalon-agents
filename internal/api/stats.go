@@ -61,7 +61,10 @@ type statsRun struct {
 	At      string `json:"at"`     // RFC3339 (finished, else queued)
 	Matched int    `json:"matched"`
 	Actions int    `json:"actions"` // writes performed (live) or would-do (dry run)
-	Error   string `json:"error,omitempty"`
+	// Writes is the per-write detail behind Actions (resource + id, or a dry
+	// run's operation) so the UI can show WHICH action was taken, not just a count.
+	Writes []writeDetail `json:"writes,omitempty"`
+	Error  string        `json:"error,omitempty"`
 }
 
 type statsResponse struct {
@@ -118,10 +121,11 @@ func buildStats(runs []agent.Run, windowDays int, now time.Time) statsResponse {
 		if at == nil {
 			at = &run.QueuedAt
 		}
-		matched, actions := deriveRunCounts(run)
+		matched, writes := deriveRunCounts(run)
+		actions := len(writes)
 		rows = append(rows, statsRun{
 			ID: run.ID, Kind: run.TriggerType, Status: run.Status,
-			At: rfc3339(at), Matched: matched, Actions: actions, Error: run.Error,
+			At: rfc3339(at), Matched: matched, Actions: actions, Writes: writes, Error: run.Error,
 		})
 
 		dry := run.TriggerType == agent.TriggerDryRun
@@ -149,7 +153,7 @@ func buildStats(runs []agent.Run, windowDays int, now time.Time) statsResponse {
 		case agent.StatusFailed:
 			tiles.FailedRuns++
 		case agent.StatusCompleted:
-			if matched == 0 {
+			if matched == 0 && actions == 0 {
 				tiles.NoMatchRuns++
 			}
 			tiles.ActionsTaken += actions
@@ -174,17 +178,26 @@ type traceBlocks map[string]struct {
 	} `json:"steps"`
 }
 
+// writeDetail describes one write a run performed, extracted from the trace so
+// the UI can show WHICH action was taken ("created ticket #525719"), not just a
+// count. Resource/ID come from a live write's output ({"ticket":{"id":…}});
+// Operation is set for a dry run's skipped write ({"dry_run":true,"operation":…}).
+type writeDetail struct {
+	Operation string `json:"operation,omitempty"`
+	Resource  string `json:"resource,omitempty"`
+	ID        any    `json:"id,omitempty"`
+}
+
 // deriveRunCounts reads a run's Result (the per-step trace) and returns how many
-// records the run MATCHED (the largest list-like step output) and how many
-// WRITES it performed or would perform (create/update/delete/notify steps; a
-// dry run's skipped writes carry `"dry_run": true`). It handles both result
-// shapes: a scheduled run stores the trace at top level ({"blocks":…}); an
-// event run stores it per firing ({"firings":[{"result":{"blocks":…}}]}).
-// Best-effort: any parse failure yields (0,0) — never an error, so stats never
-// break on an odd trace.
-func deriveRunCounts(run agent.Run) (matched, actions int) {
+// records the run MATCHED (the largest list-like step output) and the WRITES it
+// performed or would perform (create/update/delete/notify steps; a dry run's
+// skipped writes carry `"dry_run": true`). It handles both result shapes: a
+// scheduled run stores the trace at top level ({"blocks":…}); an event run
+// stores it per firing ({"firings":[{"result":{"blocks":…}}]}). Best-effort:
+// any parse failure yields no counts — never an error, so stats never break.
+func deriveRunCounts(run agent.Run) (matched int, writes []writeDetail) {
 	if len(run.Result) == 0 {
-		return 0, 0
+		return 0, nil
 	}
 	var payload struct {
 		Blocks  traceBlocks `json:"blocks"`
@@ -195,25 +208,25 @@ func deriveRunCounts(run agent.Run) (matched, actions int) {
 		} `json:"firings"`
 	}
 	if err := json.Unmarshal(run.Result, &payload); err != nil {
-		return 0, 0
+		return 0, nil
 	}
-	countBlocks := func(blocks traceBlocks) {
+	walk := func(blocks traceBlocks) {
 		for _, block := range blocks {
 			for _, step := range block.Steps {
 				if n, ok := listCount(step.Output); ok && n > matched {
 					matched = n
 				}
-				if isWriteOutput(step.Output) {
-					actions++
+				if w, ok := writeFromOutput(step.Output); ok {
+					writes = append(writes, w)
 				}
 			}
 		}
 	}
-	countBlocks(payload.Blocks)
+	walk(payload.Blocks)
 	for _, f := range payload.Firings {
-		countBlocks(f.Result.Blocks)
+		walk(f.Result.Blocks)
 	}
-	return matched, actions
+	return matched, writes
 }
 
 // deriveDryRunDetail extracts the "what would happen" detail from a dry run's
@@ -316,23 +329,39 @@ func listCount(raw json.RawMessage) (int, bool) {
 	return 0, false
 }
 
-// isWriteOutput reports whether a step output is a write: a dry run's skipped
-// write carries `"dry_run": true`; a live write returns the created/updated
-// record, which we detect by an "id" without a list payload.
-func isWriteOutput(raw json.RawMessage) bool {
+// writeFromOutput reports whether a step output is a write and, if so, what it
+// wrote. A dry run's skipped write carries `"dry_run": true` (+ "operation").
+// A live write returns the created/updated record — detected by an "id" with no
+// list payload, either top-level ({"id":…}) or wrapped in its single resource
+// key ({"ticket":{"id":…}}, as the timly-api create tools return). A list read
+// is never a write.
+func writeFromOutput(raw json.RawMessage) (writeDetail, bool) {
 	if len(raw) == 0 {
-		return false
+		return writeDetail{}, false
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return false
+		return writeDetail{}, false
 	}
 	if dry, ok := obj["dry_run"].(bool); ok && dry {
-		return true
+		op, _ := obj["operation"].(string)
+		return writeDetail{Operation: op}, true
 	}
 	if _, isList := listCount(raw); isList {
-		return false // a list read, not a write
+		return writeDetail{}, false // a list read, not a write
 	}
-	_, hasID := obj["id"]
-	return hasID
+	if id, ok := obj["id"]; ok {
+		return writeDetail{ID: id}, true
+	}
+	// Single-resource wrapper: {"ticket": {"id": …}} → resource "ticket".
+	if len(obj) == 1 {
+		for k, v := range obj {
+			if m, ok := v.(map[string]any); ok {
+				if id, ok := m["id"]; ok {
+					return writeDetail{Resource: k, ID: id}, true
+				}
+			}
+		}
+	}
+	return writeDetail{}, false
 }
