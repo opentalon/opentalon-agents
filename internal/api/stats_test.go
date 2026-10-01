@@ -102,20 +102,25 @@ func eventResult(t *testing.T, steps map[string]string) json.RawMessage {
 }
 
 // An event run carries its trace per firing; a created ticket must still count
-// as an action and a list read as a match (previously both read as 0).
+// as an action (with its resource + id) and a list read as a match. The create
+// tool wraps the record in its resource key ({"ticket":{"id":…}}), which must be
+// recognized as a write even though the id is not top-level.
 func TestDeriveRunCountsEventFiringTrace(t *testing.T) {
 	run := agent.Run{
 		TriggerType: agent.TriggerEvent, Status: agent.StatusCompleted,
 		Result: eventResult(t, map[string]string{
 			"search": `{"items":[{"id":1}]}`,
-			"ticket": `{"id":525560,"name":"Reorder Alex stock shit"}`,
+			"ticket": `{"ticket":{"id":525719,"name":"Reorder Alex stock shit"}}`,
 		}),
 	}
-	matched, actions := deriveRunCounts(run)
+	matched, writes := deriveRunCounts(run)
 	if matched != 1 {
 		t.Errorf("matched = %d, want 1", matched)
 	}
-	if actions != 1 {
-		t.Errorf("actions = %d, want 1 (the created ticket)", actions)
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d, want 1 (the created ticket)", len(writes))
+	}
+	if writes[0].Resource != "ticket" || writes[0].ID != float64(525719) {
+		t.Errorf("write = %+v, want resource=ticket id=525719", writes[0])
 	}
 }
