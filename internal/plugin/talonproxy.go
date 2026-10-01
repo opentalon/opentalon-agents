@@ -115,12 +115,17 @@ func (p tlnProxy) Run(ctx context.Context, host plugin.HostCaller, src string, i
 	return host.RunAction(ctx, p.pluginName, "execute_workflow", id.apply(map[string]string{"workflow": src}))
 }
 
-// Firing describes one on-block that fired during an Evaluate call.
+// Firing describes one on-block that fired during an Evaluate call. Result
+// carries the fired block's per-step trace ({"blocks":{…}}, same shape as a
+// scheduled run's result) so a recorded event run captures what the firing
+// actually did — the tools it ran and their outputs — which the stats layer
+// counts as matches/actions. Empty for logger-only or failed firings.
 type Firing struct {
-	OnBlock string `json:"on_block"`
-	Ref     string `json:"ref,omitempty"`
-	RefKind string `json:"ref_kind,omitempty"`
-	Error   string `json:"error,omitempty"`
+	OnBlock string          `json:"on_block"`
+	Ref     string          `json:"ref,omitempty"`
+	RefKind string          `json:"ref_kind,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
 }
 
 // EvalResult is the parsed result of tln-plugin.evaluate: which

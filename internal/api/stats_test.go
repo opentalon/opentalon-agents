@@ -74,3 +74,48 @@ func TestBuildStats(t *testing.T) {
 		t.Errorf("live1 row = matched %d actions %d, want 3/1", got.Runs[1].Matched, got.Runs[1].Actions)
 	}
 }
+
+// eventResult builds an event-triggered run Result: the per-step trace lives
+// under firings[].result.blocks rather than at the top level.
+func eventResult(t *testing.T, steps map[string]string) json.RawMessage {
+	t.Helper()
+	type step struct {
+		Name   string          `json:"name"`
+		Output json.RawMessage `json:"output"`
+	}
+	var ss []step
+	for name, out := range steps {
+		ss = append(ss, step{Name: name, Output: json.RawMessage(out)})
+	}
+	b, err := json.Marshal(map[string]any{
+		"firings": []any{map[string]any{
+			"on_block": `on change attr "current_stock"`,
+			"ref":      "Reorder",
+			"ref_kind": "workflow",
+			"result":   map[string]any{"blocks": map[string]any{"Reorder": map[string]any{"steps": ss}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal event result: %v", err)
+	}
+	return b
+}
+
+// An event run carries its trace per firing; a created ticket must still count
+// as an action and a list read as a match (previously both read as 0).
+func TestDeriveRunCountsEventFiringTrace(t *testing.T) {
+	run := agent.Run{
+		TriggerType: agent.TriggerEvent, Status: agent.StatusCompleted,
+		Result: eventResult(t, map[string]string{
+			"search": `{"items":[{"id":1}]}`,
+			"ticket": `{"id":525560,"name":"Reorder Alex stock shit"}`,
+		}),
+	}
+	matched, actions := deriveRunCounts(run)
+	if matched != 1 {
+		t.Errorf("matched = %d, want 1", matched)
+	}
+	if actions != 1 {
+		t.Errorf("actions = %d, want 1 (the created ticket)", actions)
+	}
+}

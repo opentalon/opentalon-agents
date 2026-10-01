@@ -165,35 +165,53 @@ func rfc3339(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
+// traceBlocks is the per-step trace shape both result forms carry: a map of
+// block name → its steps' name + output.
+type traceBlocks map[string]struct {
+	Steps []struct {
+		Name   string          `json:"name"`
+		Output json.RawMessage `json:"output"`
+	} `json:"steps"`
+}
+
 // deriveRunCounts reads a run's Result (the per-step trace) and returns how many
 // records the run MATCHED (the largest list-like step output) and how many
 // WRITES it performed or would perform (create/update/delete/notify steps; a
-// dry run's skipped writes carry `"dry_run": true`). Best-effort: any parse
-// failure yields (0,0) — never an error, so stats never break on an odd trace.
+// dry run's skipped writes carry `"dry_run": true`). It handles both result
+// shapes: a scheduled run stores the trace at top level ({"blocks":…}); an
+// event run stores it per firing ({"firings":[{"result":{"blocks":…}}]}).
+// Best-effort: any parse failure yields (0,0) — never an error, so stats never
+// break on an odd trace.
 func deriveRunCounts(run agent.Run) (matched, actions int) {
 	if len(run.Result) == 0 {
 		return 0, 0
 	}
 	var payload struct {
-		Blocks map[string]struct {
-			Steps []struct {
-				Name   string          `json:"name"`
-				Output json.RawMessage `json:"output"`
-			} `json:"steps"`
-		} `json:"blocks"`
+		Blocks  traceBlocks `json:"blocks"`
+		Firings []struct {
+			Result struct {
+				Blocks traceBlocks `json:"blocks"`
+			} `json:"result"`
+		} `json:"firings"`
 	}
 	if err := json.Unmarshal(run.Result, &payload); err != nil {
 		return 0, 0
 	}
-	for _, block := range payload.Blocks {
-		for _, step := range block.Steps {
-			if n, ok := listCount(step.Output); ok && n > matched {
-				matched = n
-			}
-			if isWriteOutput(step.Output) {
-				actions++
+	countBlocks := func(blocks traceBlocks) {
+		for _, block := range blocks {
+			for _, step := range block.Steps {
+				if n, ok := listCount(step.Output); ok && n > matched {
+					matched = n
+				}
+				if isWriteOutput(step.Output) {
+					actions++
+				}
 			}
 		}
+	}
+	countBlocks(payload.Blocks)
+	for _, f := range payload.Firings {
+		countBlocks(f.Result.Blocks)
 	}
 	return matched, actions
 }
