@@ -26,7 +26,7 @@ func TestManager_DuplicateNameRejected(t *testing.T) {
 func TestManager_MutationsNotFound(t *testing.T) {
 	ctx := context.Background()
 	m := testManager(t)
-	if _, err := m.Update(ctx, "g1", "nope", "workflow \"y\" {}", nil); err != ErrNotFound {
+	if _, err := m.Update(ctx, "g1", "nope", "workflow \"y\" {}", nil, nil, ""); err != ErrNotFound {
 		t.Errorf("update missing: got %v", err)
 	}
 	if _, err := m.SetEnabled(ctx, "g1", "nope", false); err != ErrNotFound {
