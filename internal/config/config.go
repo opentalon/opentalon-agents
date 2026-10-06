@@ -5,6 +5,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 )
 
 // Config is the plugin's configuration. All fields are optional; sane
@@ -105,6 +106,12 @@ func Parse(jsonStr string) (*Config, error) {
 	if cfg.DB.DSN == "" && cfg.DB.Driver == "sqlite" {
 		cfg.DB.DSN = "./agents.db"
 	}
+	// Expand ${VAR}/$VAR in the DSN against the environment so a config can use
+	// e.g. "${HOME}/.opentalon-local-dev/agents.db". The host passes plugin
+	// config blocks through verbatim (it does not expand them), so the plugin
+	// must — same as openapi-plugin does for its spec_url/base_url. Unset vars
+	// expand to empty, matching os.Expand semantics.
+	cfg.DB.DSN = os.ExpandEnv(cfg.DB.DSN)
 	if cfg.TlnPluginName == "" {
 		cfg.TlnPluginName = "tln-plugin"
 	}

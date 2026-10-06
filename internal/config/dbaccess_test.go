@@ -2,6 +2,19 @@ package config
 
 import "testing"
 
+// The host passes plugin config blocks verbatim, so the plugin expands ${VAR}
+// in the DSN itself (e.g. "${HOME}/.opentalon-local-dev/agents.db").
+func TestParseExpandsEnvInDSN(t *testing.T) {
+	t.Setenv("AGENTS_TEST_HOME", "/Users/test")
+	cfg, err := Parse(`{"db":{"driver":"sqlite","dsn":"${AGENTS_TEST_HOME}/.opentalon-local-dev/agents.db"}}`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := "/Users/test/.opentalon-local-dev/agents.db"; cfg.DB.DSN != want {
+		t.Errorf("dsn = %q, want %q", cfg.DB.DSN, want)
+	}
+}
+
 // db_access: true makes the host inject its own state-store credentials as
 // __db_driver / __db_dsn, already expanded. Using them is what lets the plugin
 // share the host's database without the DSN being written down a second time.
