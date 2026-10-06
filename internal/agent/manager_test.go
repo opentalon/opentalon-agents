@@ -54,8 +54,9 @@ func TestManager_CRUDRoundTrip(t *testing.T) {
 		t.Errorf("expected ErrNotFound across groups, got %v", err)
 	}
 
-	// Update source.
-	if _, err := m.Update(ctx, "g1", created.ID, `workflow "y" {}`, nil); err != nil {
+	// Update source, setting a tool manifest + api version.
+	manifest := []ToolRef{{Server: "timly-api", Tool: "list_items"}}
+	if _, err := m.Update(ctx, "g1", created.ID, `workflow "y" {}`, nil, &manifest, "v1"); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, _ = m.Get(ctx, "g1", created.ID)
@@ -64,6 +65,21 @@ func TestManager_CRUDRoundTrip(t *testing.T) {
 	}
 	if len(got.Triggers) != 1 {
 		t.Errorf("nil triggers on update should preserve existing, got %+v", got.Triggers)
+	}
+	if len(got.ToolManifest) != 1 || got.ToolManifest[0] != (ToolRef{Server: "timly-api", Tool: "list_items"}) {
+		t.Errorf("tool manifest not round-tripped: %+v", got.ToolManifest)
+	}
+	if got.APIVersion != "v1" {
+		t.Errorf("api_version not persisted: %q", got.APIVersion)
+	}
+
+	// A nil manifest on a later update preserves the stored one.
+	if _, err := m.Update(ctx, "g1", created.ID, `workflow "z" {}`, nil, nil, ""); err != nil {
+		t.Fatalf("update (preserve): %v", err)
+	}
+	got, _ = m.Get(ctx, "g1", created.ID)
+	if len(got.ToolManifest) != 1 || got.APIVersion != "v1" {
+		t.Errorf("nil manifest/blank api_version should preserve, got %+v / %q", got.ToolManifest, got.APIVersion)
 	}
 
 	// Enable/disable.

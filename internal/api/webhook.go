@@ -152,6 +152,11 @@ type createRequest struct {
 	Autonomy    string          `json:"autonomy"`
 	Config      string          `json:"config"`
 	Triggers    []agent.Trigger `json:"triggers"`
+	// ToolManifest/APIVersion let the host supply the derived tool index it
+	// resolved against its own API spec (this path has no HostCaller to run
+	// tln-plugin.check itself). Both optional; omitted → empty manifest / blank.
+	ToolManifest []agent.ToolRef `json:"tool_manifest"`
+	APIVersion   string          `json:"api_version"`
 }
 
 // handleCreate serves POST /v1/agents — persist a (draft) agent. The Tln is
@@ -176,15 +181,17 @@ func (h *server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a, err := h.mgr.Create(r.Context(), agent.Agent{
-		Name:        req.Name,
-		Description: req.Description,
-		GroupID:     req.GroupID,
-		EntityID:    req.EntityID,
-		TlnSource:   req.TlnSource,
-		Enabled:     req.Enabled,
-		Autonomy:    req.Autonomy,
-		Config:      req.Config,
-		Triggers:    req.Triggers,
+		Name:         req.Name,
+		Description:  req.Description,
+		GroupID:      req.GroupID,
+		EntityID:     req.EntityID,
+		TlnSource:    req.TlnSource,
+		Enabled:      req.Enabled,
+		Autonomy:     req.Autonomy,
+		Config:       req.Config,
+		Triggers:     req.Triggers,
+		ToolManifest: req.ToolManifest,
+		APIVersion:   req.APIVersion,
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -205,6 +212,11 @@ type updateRequest struct {
 	Description *string         `json:"description"`
 	Autonomy    *string         `json:"autonomy"`
 	Config      *string         `json:"config"`
+	// ToolManifest/APIVersion refresh the derived tool index when the host
+	// re-resolves it (this path has no HostCaller to extract it). A nil
+	// ToolManifest preserves the stored manifest; blank APIVersion preserves it.
+	ToolManifest *[]agent.ToolRef `json:"tool_manifest"`
+	APIVersion   string           `json:"api_version"`
 }
 
 // handleUpdate serves PUT /v1/agents/{id} — re-save a draft's Tln and/or flip
@@ -233,13 +245,13 @@ func (h *server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	var a agent.Agent
 	switch {
 	case req.TlnSource != nil:
-		a, err = h.mgr.Update(r.Context(), req.GroupID, id, *req.TlnSource, req.Triggers)
+		a, err = h.mgr.Update(r.Context(), req.GroupID, id, *req.TlnSource, req.Triggers, req.ToolManifest, req.APIVersion)
 	case req.Triggers != nil:
 		// Triggers-only update (e.g. the wizard's "When" step re-saving the
 		// schedule/event without touching the program): keep the stored Tln.
 		var cur agent.Agent
 		if cur, err = h.mgr.Get(r.Context(), req.GroupID, id); err == nil {
-			a, err = h.mgr.Update(r.Context(), req.GroupID, id, cur.TlnSource, req.Triggers)
+			a, err = h.mgr.Update(r.Context(), req.GroupID, id, cur.TlnSource, req.Triggers, req.ToolManifest, req.APIVersion)
 		}
 	default:
 		a, err = h.mgr.Get(r.Context(), req.GroupID, id)
@@ -399,6 +411,7 @@ func (h *server) handleGet(w http.ResponseWriter, r *http.Request) {
 		"group_id": a.GroupID, "entity_id": a.EntityID, "enabled": a.Enabled,
 		"tln_source": a.TlnSource, "triggers": a.Triggers,
 		"autonomy": a.Autonomy, "config": a.Config,
+		"tool_manifest": a.ToolManifest, "api_version": a.APIVersion,
 	})
 }
 

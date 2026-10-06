@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/opentalon/opentalon-agents/internal/agent"
 	"github.com/opentalon/opentalon/pkg/plugin"
 )
 
@@ -67,21 +68,24 @@ func (id Identity) apply(args map[string]string) map[string]string {
 // human-readable diagnostics for invalid source (a normal result, not an
 // error). A non-nil error means the check action itself failed to run
 // (e.g. tln-plugin not loaded).
-func (p tlnProxy) Check(ctx context.Context, host plugin.HostCaller, src string) (ok bool, diagnostics string, err error) {
+func (p tlnProxy) Check(ctx context.Context, host plugin.HostCaller, src string) (ok bool, diagnostics string, tools []agent.ToolRef, err error) {
 	res, err := host.RunAction(ctx, p.pluginName, "check", map[string]string{"workflow": src})
 	if err != nil {
-		return false, "", err
+		return false, "", nil, err
 	}
 	var parsed struct {
 		OK bool `json:"ok"`
+		// tools the source calls, for the caller to persist as a tool manifest.
+		// Absent against a tln-plugin that predates the field → empty manifest.
+		Tools []agent.ToolRef `json:"tools"`
 	}
 	if res.StructuredContent != "" {
 		if jerr := json.Unmarshal([]byte(res.StructuredContent), &parsed); jerr == nil && parsed.OK {
-			return true, "", nil
+			return true, "", parsed.Tools, nil
 		}
 	}
 	// Invalid source: tln-plugin puts the diagnostics in Content.
-	return false, res.Content, nil
+	return false, res.Content, nil, nil
 }
 
 // Reactive reports whether the Tln source contains reactive rules (on/detect

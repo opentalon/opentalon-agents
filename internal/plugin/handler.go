@@ -323,7 +323,7 @@ func (h *Handler) actionValidate(ctx context.Context, req pkg.Request, host pkg.
 	if src == "" {
 		return errResp(req.ID, "tln_source is required")
 	}
-	ok, diagnostics, err := h.currentTln().Check(ctx, host, src)
+	ok, diagnostics, _, err := h.currentTln().Check(ctx, host, src)
 	if err != nil {
 		return errResp(req.ID, fmt.Sprintf("could not validate Tln source: %v", err))
 	}
@@ -366,17 +366,20 @@ func (h *Handler) actionCreate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if spec != nil && spec.Enabled && rc.SessionID == "" {
 		return errResp(req.ID, "escalate.enabled needs an interactive session to address the turn to, but none is available here")
 	}
-	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
+	resp, tools, bad := h.validate(ctx, req.ID, host, src)
+	if bad {
 		return resp
 	}
 	a, err := h.mgr.Create(ctx, agent.Agent{
-		Name:        name,
-		Description: req.Args["description"],
-		GroupID:     rc.GroupID,
-		EntityID:    rc.EntityID,
-		TlnSource:   src,
-		Triggers:    triggers,
-		Enabled:     true,
+		Name:         name,
+		Description:  req.Args["description"],
+		GroupID:      rc.GroupID,
+		EntityID:     rc.EntityID,
+		TlnSource:    src,
+		Triggers:     triggers,
+		Enabled:      true,
+		ToolManifest: tools,
+		APIVersion:   req.Args["api_version"],
 	})
 	if err != nil {
 		return errResp(req.ID, err.Error())
@@ -499,10 +502,11 @@ func (h *Handler) actionUpdate(ctx context.Context, req pkg.Request, host pkg.Ho
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
-	if resp, bad := h.validate(ctx, req.ID, host, src); bad {
+	resp, tools, bad := h.validate(ctx, req.ID, host, src)
+	if bad {
 		return resp
 	}
-	a, err := h.mgr.Update(ctx, rc.GroupID, req.Args["id"], src, triggers)
+	a, err := h.mgr.Update(ctx, rc.GroupID, req.Args["id"], src, triggers, &tools, req.Args["api_version"])
 	if err != nil {
 		return errResp(req.ID, err.Error())
 	}
@@ -585,17 +589,17 @@ func (h *Handler) saveNotification(ctx context.Context, callID, agentID string, 
 
 // validate runs tln-plugin.check and, on invalid source, returns a
 // populated error response and bad=true. On a valid source it returns
-// bad=false.
-func (h *Handler) validate(ctx context.Context, callID string, host pkg.HostCaller, src string) (pkg.Response, bool) {
+// bad=false and the tool manifest the source calls, for the caller to persist.
+func (h *Handler) validate(ctx context.Context, callID string, host pkg.HostCaller, src string) (pkg.Response, []agent.ToolRef, bool) {
 	tln := h.currentTln()
-	ok, diagnostics, err := tln.Check(ctx, host, src)
+	ok, diagnostics, tools, err := tln.Check(ctx, host, src)
 	if err != nil {
-		return errResp(callID, fmt.Sprintf("could not validate Tln source (is %q loaded?): %v", tln.pluginName, err)), true
+		return errResp(callID, fmt.Sprintf("could not validate Tln source (is %q loaded?): %v", tln.pluginName, err)), nil, true
 	}
 	if !ok {
-		return errResp(callID, "invalid Tln source; fix and retry:\n"+diagnostics), true
+		return errResp(callID, "invalid Tln source; fix and retry:\n"+diagnostics), nil, true
 	}
-	return pkg.Response{}, false
+	return pkg.Response{}, tools, false
 }
 
 // get resolves the agent named by req.Args["id"] within the caller's group.
@@ -620,6 +624,8 @@ func summarize(a agent.Agent) map[string]any {
 		"description":   a.Description,
 		"enabled":       a.Enabled,
 		"trigger_types": types,
+		"tool_manifest": a.ToolManifest,
+		"api_version":   a.APIVersion,
 		"updated_at":    a.UpdatedAt,
 	}
 }

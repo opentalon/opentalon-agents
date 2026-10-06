@@ -44,12 +44,16 @@ func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 	if err != nil {
 		return Agent{}, fmt.Errorf("agent create: encode triggers: %w", err)
 	}
+	manifest, err := marshalManifest(a.ToolManifest)
+	if err != nil {
+		return Agent{}, fmt.Errorf("agent create: encode tool_manifest: %w", err)
+	}
 	q := m.db.Dialect.Rebind(`INSERT INTO agents
-		(id, name, description, group_id, entity_id, tln_source, triggers_json, enabled, autonomy, config, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		(id, name, description, group_id, entity_id, tln_source, triggers_json, enabled, autonomy, config, tool_manifest, api_version, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	_, err = m.db.SQL().ExecContext(ctx, q,
 		a.ID, a.Name, a.Description, a.GroupID, a.EntityID, a.TlnSource,
-		string(triggers), boolToInt(a.Enabled), a.Autonomy, a.Config, now.Format(timeFmt), now.Format(timeFmt))
+		string(triggers), boolToInt(a.Enabled), a.Autonomy, a.Config, manifest, a.APIVersion, now.Format(timeFmt), now.Format(timeFmt))
 	if err != nil {
 		return Agent{}, fmt.Errorf("agent create: %w", err)
 	}
@@ -59,7 +63,7 @@ func (m *Manager) Create(ctx context.Context, a Agent) (Agent, error) {
 // List returns all agents in the group, newest first.
 func (m *Manager) List(ctx context.Context, groupID string) ([]Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents
+		triggers_json, enabled, autonomy, config, tool_manifest, api_version, created_at, updated_at FROM agents
 		WHERE group_id = ? ORDER BY created_at DESC`)
 	rows, err := m.db.SQL().QueryContext(ctx, q, groupID)
 	if err != nil {
@@ -101,7 +105,7 @@ func (m *Manager) ListEnabledEventAgents(ctx context.Context, groupID, eventType
 // Get resolves an agent by id or name within the group.
 func (m *Manager) Get(ctx context.Context, groupID, idOrName string) (Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents
+		triggers_json, enabled, autonomy, config, tool_manifest, api_version, created_at, updated_at FROM agents
 		WHERE group_id = ? AND (id = ? OR name = ?) LIMIT 1`)
 	row := m.db.SQL().QueryRowContext(ctx, q, groupID, idOrName, idOrName)
 	a, err := scanAgent(row)
@@ -113,7 +117,13 @@ func (m *Manager) Get(ctx context.Context, groupID, idOrName string) (Agent, err
 
 // Update overwrites an agent's Tln source and triggers. The caller must
 // have validated newSource first. Returns the updated agent.
-func (m *Manager) Update(ctx context.Context, groupID, idOrName, newSource string, triggers []Trigger) (Agent, error) {
+// toolManifest and apiVersion carry the derived tool index: a nil toolManifest
+// (or blank apiVersion) preserves the stored value — the LLM/plugin path passes
+// the freshly-extracted manifest, while the HTTP path, which has no HostCaller
+// to run tln-plugin.check, passes nil to keep whatever was last stored (or what
+// the host supplied in the request body).
+func (m *Manager) Update(ctx context.Context, groupID, idOrName, newSource string, triggers []Trigger,
+	toolManifest *[]ToolRef, apiVersion string) (Agent, error) {
 	a, err := m.Get(ctx, groupID, idOrName)
 	if err != nil {
 		return Agent{}, err
@@ -125,16 +135,42 @@ func (m *Manager) Update(ctx context.Context, groupID, idOrName, newSource strin
 	if err != nil {
 		return Agent{}, fmt.Errorf("agent update: encode triggers: %w", err)
 	}
+	newManifest := a.ToolManifest
+	if toolManifest != nil {
+		newManifest = *toolManifest
+	}
+	manifest, err := marshalManifest(newManifest)
+	if err != nil {
+		return Agent{}, fmt.Errorf("agent update: encode tool_manifest: %w", err)
+	}
+	if apiVersion == "" {
+		apiVersion = a.APIVersion
+	}
 	now := time.Now().UTC()
-	q := m.db.Dialect.Rebind(`UPDATE agents SET tln_source = ?, triggers_json = ?, updated_at = ?
+	q := m.db.Dialect.Rebind(`UPDATE agents SET tln_source = ?, triggers_json = ?, tool_manifest = ?, api_version = ?, updated_at = ?
 		WHERE id = ?`)
-	if _, err := m.db.SQL().ExecContext(ctx, q, newSource, string(tj), now.Format(timeFmt), a.ID); err != nil {
+	if _, err := m.db.SQL().ExecContext(ctx, q, newSource, string(tj), manifest, apiVersion, now.Format(timeFmt), a.ID); err != nil {
 		return Agent{}, fmt.Errorf("agent update: %w", err)
 	}
 	a.TlnSource = newSource
 	a.Triggers = triggers
+	a.ToolManifest = newManifest
+	a.APIVersion = apiVersion
 	a.UpdatedAt = now
 	return a, nil
+}
+
+// marshalManifest encodes a tool manifest as a JSON array, normalising nil to
+// "[]" (not "null") so the stored column stays a valid empty array.
+func marshalManifest(m []ToolRef) (string, error) {
+	if len(m) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // SetEnabled flips an agent's enabled flag.
@@ -524,7 +560,7 @@ func orderClause(sortBy, sortDir string) string {
 // ordered by the filter's sort (default newest-first). Used by the query API.
 func (m *Manager) QueryAgents(ctx context.Context, f AgentFilter) ([]Agent, error) {
 	q := `SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents WHERE 1=1`
+		triggers_json, enabled, autonomy, config, tool_manifest, api_version, created_at, updated_at FROM agents WHERE 1=1`
 	var args []any
 	if f.GroupID != "" {
 		q += " AND group_id = ?"
@@ -593,7 +629,7 @@ func (m *Manager) CountAgents(ctx context.Context, f AgentFilter) (int, error) {
 // engine, which is unscoped).
 func (m *Manager) GetByID(ctx context.Context, id string) (Agent, error) {
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents WHERE id = ? LIMIT 1`)
+		triggers_json, enabled, autonomy, config, tool_manifest, api_version, created_at, updated_at FROM agents WHERE id = ? LIMIT 1`)
 	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Agent{}, ErrNotFound
@@ -610,7 +646,7 @@ func (m *Manager) WebhookAgent(ctx context.Context, userID, idOrName string) (Ag
 		return Agent{}, ErrNotFound
 	}
 	q := m.db.Dialect.Rebind(`SELECT id, name, description, group_id, entity_id, tln_source,
-		triggers_json, enabled, autonomy, config, created_at, updated_at FROM agents
+		triggers_json, enabled, autonomy, config, tool_manifest, api_version, created_at, updated_at FROM agents
 		WHERE enabled = 1 AND entity_id = ? AND (id = ? OR name = ?) LIMIT 1`)
 	a, err := scanAgent(m.db.SQL().QueryRowContext(ctx, q, userID, idOrName, idOrName))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -765,16 +801,22 @@ func scanAgent(s scanner) (Agent, error) {
 		a        Agent
 		triggers string
 		enabled  int
+		manifest string
 		created  string
 		updated  string
 	)
 	if err := s.Scan(&a.ID, &a.Name, &a.Description, &a.GroupID, &a.EntityID, &a.TlnSource,
-		&triggers, &enabled, &a.Autonomy, &a.Config, &created, &updated); err != nil {
+		&triggers, &enabled, &a.Autonomy, &a.Config, &manifest, &a.APIVersion, &created, &updated); err != nil {
 		return Agent{}, err
 	}
 	if triggers != "" {
 		if err := json.Unmarshal([]byte(triggers), &a.Triggers); err != nil {
 			return Agent{}, fmt.Errorf("agent scan: decode triggers: %w", err)
+		}
+	}
+	if manifest != "" {
+		if err := json.Unmarshal([]byte(manifest), &a.ToolManifest); err != nil {
+			return Agent{}, fmt.Errorf("agent scan: decode tool_manifest: %w", err)
 		}
 	}
 	a.Enabled = enabled != 0

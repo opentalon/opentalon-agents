@@ -27,9 +27,30 @@ type Agent struct {
 	// (template key + slot values), stored verbatim and echoed back so the host
 	// can rehydrate its editor. The plugin never interprets or queries it; the
 	// executable artifact is TlnSource.
-	Config    string    `json:"config,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Config string `json:"config,omitempty"`
+	// ToolManifest is the set of MCP tools this agent's TlnSource calls
+	// ({server, tool} pairs), extracted from the source at create/update time.
+	// It is a derived index — TlnSource stays the source of truth — kept so a
+	// later Timly API change can enumerate which stored agents reference a given
+	// provider/operation and need migrating.
+	ToolManifest []ToolRef `json:"tool_manifest,omitempty"`
+	// APIVersion is the Timly API generation the agent was authored against
+	// (e.g. "v1"). The engine cannot derive it (the version lives in the
+	// openapi-plugin spec, not the tln source), so the host stamps it at
+	// create/update; blank when not supplied. Scopes a migration to one API
+	// generation alongside ToolManifest.
+	APIVersion string    `json:"api_version,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// ToolRef is one MCP tool an agent's workflow calls: the Server (provider /
+// connector name, e.g. "timly-api") and the Tool (operation name, e.g.
+// "list_items"). It mirrors tln-language's tln.ToolRef and is received verbatim
+// in tln-plugin's check result (the `tools` field).
+type ToolRef struct {
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
 }
 
 // Trigger describes when an agent should fire. Type is one of
@@ -257,6 +278,8 @@ type AgentSummary struct {
 	Enabled      bool      `json:"enabled"`
 	Autonomy     string    `json:"autonomy,omitempty"`
 	TriggerTypes []string  `json:"trigger_types"`
+	ToolManifest []ToolRef `json:"tool_manifest,omitempty"`
+	APIVersion   string    `json:"api_version,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
@@ -269,7 +292,9 @@ func (a Agent) Summary() AgentSummary {
 	return AgentSummary{
 		ID: a.ID, Name: a.Name, Description: a.Description,
 		GroupID: a.GroupID, EntityID: a.EntityID, Enabled: a.Enabled,
-		Autonomy: a.Autonomy, TriggerTypes: types, UpdatedAt: a.UpdatedAt,
+		Autonomy: a.Autonomy, TriggerTypes: types,
+		ToolManifest: a.ToolManifest, APIVersion: a.APIVersion,
+		UpdatedAt: a.UpdatedAt,
 	}
 }
 
